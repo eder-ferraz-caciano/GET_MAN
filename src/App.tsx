@@ -2,13 +2,14 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Folder, FileText, Plus, Download, Upload,
   Play, Square, Trash2, Send, Clock, Edit2, FilePlus, Terminal, AlertTriangle,
-  ChevronRight, ChevronDown, Copy, Check, MousePointer2, CopyPlus, Globe, Layers
+  ChevronRight, ChevronDown, Copy, Check, MousePointer2, CopyPlus, Globe, Layers, MoreHorizontal, Database
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import './index.css';
 
 // Types
@@ -307,6 +308,69 @@ export default function App() {
     addLog('info', '📁 Nova pasta raiz criada');
   };
 
+  const generateCrudExample = () => {
+    const authSetupScript = `// Exemplo prático de Login na API:
+const res = await tauriFetch("{{base_url}}/auth/login", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ email: "admin@empresa.com", password: "senha123" })
+});
+const data = await res.json();
+getman.setEnv("token_acesso", data.token);
+getman.log("Token renovado e salvo na pasta!");`;
+
+    const folderId = uuidv4();
+    const newFolder: CollectionNode = {
+      id: folderId,
+      name: 'API (Exemplo CRUD e Login)',
+      type: 'folder',
+      expanded: true,
+      children: [
+        {
+          id: uuidv4(),
+          name: '1. Listar Usuários (GET)',
+          type: 'request',
+          request: {
+            ...defaultRequest,
+            id: uuidv4(),
+            name: '1. Listar Usuários (GET)',
+            method: 'GET',
+            url: '{{base_url}}/users'
+          }
+        },
+        {
+          id: uuidv4(),
+          name: '2. Criar Usuário (POST)',
+          type: 'request',
+          request: {
+            ...defaultRequest,
+            id: uuidv4(),
+            name: '2. Criar Usuário (POST)',
+            method: 'POST',
+            url: '{{base_url}}/users',
+            body: '{\n  "name": "João Silva",\n  "email": "joao@email.com",\n  "role": "admin"\n}'
+          }
+        }
+      ],
+      folderConfig: {
+        auth: {
+          type: 'bearer',
+          token: '{{token_acesso}}',
+          username: '',
+          password: ''
+        },
+        variables: [
+          { id: uuidv4(), key: 'base_url', value: 'http://127.0.0.1:3333' }
+        ],
+        setupScript: authSetupScript
+      }
+    };
+
+    setCollection([...collection, newFolder]);
+    setActiveNodeId(folderId);
+    addLog('success', '🚀 Template de Usuários e Login gerado com Sucesso!');
+  };
+
   const addRequestToRoot = () => {
     const req = { ...defaultRequest, id: uuidv4(), name: 'Nova Rota Solta' };
     const newNode: CollectionNode = { id: req.id, name: req.name, type: 'request', request: req };
@@ -572,7 +636,7 @@ export default function App() {
         addLog('info', `📦 Payload / Body:`, parsedBody);
       }
 
-      const res = await fetch(finalTargetUrl, opts);
+      const res = await tauriFetch(finalTargetUrl, opts);
       const text = await res.text();
       let data = text;
 
@@ -660,7 +724,7 @@ export default function App() {
         if (finalOpts && typeof finalOpts.body === 'string') {
           finalOpts.body = applyVariables(finalOpts.body, node.id);
         }
-        return window.fetch(finalUrl, finalOpts);
+        return tauriFetch(finalUrl, finalOpts);
       };
 
       const AsyncFunction = Object.getPrototypeOf(async function () { }).constructor;
@@ -914,15 +978,18 @@ export default function App() {
             )}
           </div>
 
-          <div className="node-actions">
-            {node.type === 'folder' && (
-              <button className="icon-btn" onClick={(e) => { e.stopPropagation(); addRequestToFolder(node.id); }} title="Nova Req na Pasta"><FilePlus size={14} /></button>
-            )}
-            {node.type === 'request' && (
-              <button className="icon-btn" onClick={(e) => { e.stopPropagation(); cloneRequest(node.id); }} title="Clonar/"><CopyPlus size={14} /></button>
-            )}
-            <button className="icon-btn" onClick={(e) => startRename(node.id, node.name, e)} title="Renomear"><Edit2 size={13} /></button>
-            <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); setNodeToDelete({ id: node.id, name: node.name }); }} title="Deletar"><Trash2 size={14} /></button>
+          <div className="node-actions-container">
+            <button className="icon-btn trigger" title="Opções"><MoreHorizontal size={14} /></button>
+            <div className="node-actions-menu">
+              {node.type === 'folder' && (
+                <button className="icon-btn" onClick={(e) => { e.stopPropagation(); addRequestToFolder(node.id); }} title="Nova Req na Pasta"><FilePlus size={14} /></button>
+              )}
+              {node.type === 'request' && (
+                <button className="icon-btn" onClick={(e) => { e.stopPropagation(); cloneRequest(node.id); }} title="Clonar"><CopyPlus size={14} /></button>
+              )}
+              <button className="icon-btn" onClick={(e) => startRename(node.id, node.name, e)} title="Renomear"><Edit2 size={13} /></button>
+              <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); setNodeToDelete({ id: node.id, name: node.name }); }} title="Deletar"><Trash2 size={14} /></button>
+            </div>
           </div>
 
         </div>
@@ -1131,6 +1198,12 @@ export default function App() {
             <div style={{ display: 'flex', gap: '16px' }}>
               <button className="btn btn-primary" onClick={addRequestToRoot}><Plus size={16} /> Nova Requisição Rápida</button>
               <button className="btn btn-secondary" onClick={() => { setEditingEnvId('GLOBAL'); setIsEnvModalOpen(true); }}><Layers size={16} /> Gerenciar Ambientes</button>
+            </div>
+
+            <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px dashed var(--border-strong)', width: '100%', maxWidth: '400px', display: 'flex', justifyContent: 'center' }}>
+              <button className="btn btn-primary" onClick={generateCrudExample} style={{ background: 'var(--accent-gradient)', border: 'none', boxShadow: '0 4px 15px rgba(99, 102, 241, 0.4)' }}>
+                <Database size={16} /> Gerar Template CRUD + Login Automático
+              </button>
             </div>
           </div>
         ) : activeNode.type === 'folder' ? (
@@ -1430,6 +1503,11 @@ export default function App() {
                   <div className="console-header">
                     <span style={{ color: 'var(--text-muted)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>Logs do App e Rastros</span>
                     <div style={{ display: 'flex', gap: '8px' }}>
+                      <button className="btn-icon" onClick={() => {
+                        const logsText = logs.map(l => `[${l.timestamp.toLocaleTimeString()}] ${l.message}\n${l.data ? (typeof l.data === 'string' ? l.data : JSON.stringify(l.data, null, 2)) : ''}`).join('\n\n');
+                        navigator.clipboard.writeText(logsText);
+                        addLog('success', 'Logs copiados para a área de transferência!');
+                      }} title="Copiar Logs" style={{ background: 'rgba(255,255,255,0.05)' }}><Copy size={14} /> Copiar</button>
                       <button className="btn-icon" onClick={exportLogs} title="Exportar Logs para TXT" style={{ background: 'rgba(255,255,255,0.05)' }}><Download size={14} /> Exportar</button>
                       <button className="btn-icon" onClick={() => setLogs([])} title="Limpar Console / Sweep"><Trash2 size={14} /></button>
                     </div>
@@ -1440,7 +1518,7 @@ export default function App() {
                         <span className="log-time" style={{ width: '70px', display: 'inline-block' }}>[{log.timestamp.toLocaleTimeString()}]</span>
                         <span className="log-msg" style={{ flex: 1 }}>{log.message}</span>
                         {log.data && (
-                          <pre style={{ marginTop: '4px', fontSize: '12px', background: 'rgba(0,0,0,0.3)', padding: '8px', borderRadius: '4px', color: 'var(--text-muted)' }}>
+                          <pre style={{ width: '100%', overflowX: 'auto', whiteSpace: 'pre-wrap', wordWrap: 'break-word', marginTop: '4px', fontSize: '12px', background: 'rgba(0,0,0,0.3)', padding: '8px', borderRadius: '4px', color: 'var(--text-muted)' }}>
                             {typeof log.data === 'string' ? log.data : JSON.stringify(log.data, null, 2)}
                           </pre>
                         )}
