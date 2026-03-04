@@ -1,0 +1,130 @@
+describe('GET MAN - Premium Features E2E', () => {
+    const POSTMAN_ECHO = 'https://postman-echo.com';
+
+    beforeEach(() => {
+        cy.clearLocalStorage();
+        cy.visit('/');
+        cy.get('.app-title', { timeout: 30000 }).should('be.visible');
+        cy.get('.sidebar-tree-container', { timeout: 20000 }).contains('Listar Dados', { timeout: 15000 }).click({ force: true });
+    });
+
+    // ────────────────────────────────────────────
+    // 1. CUSTOM HEADERS
+    // ────────────────────────────────────────────
+    it('Deve gerenciar Headers Customizados e validar eco', () => {
+        cy.get('.tab').contains('Headers Custo.').click();
+
+        // CRITICAL: Adicionar linha NOVA primeiro, senão digita nos existentes (Accept)
+        cy.contains('button', 'Nova Linha de Header').click();
+
+        // Agora o último input de key/value estará vazio
+        cy.get('input[placeholder="Ex: Content-Type"]').last().clear().type('X-Test-Api', { parseSpecialCharSequences: false });
+        cy.get('input[placeholder*="Ex: application/json"]').last().clear().type('Antigravity-Value', { parseSpecialCharSequences: false });
+
+        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/headers`, { parseSpecialCharSequences: false });
+        cy.contains('button', 'Fazer Disparo').click({ force: true });
+
+        // A resposta fica em div.response-panel.body-content
+        cy.get('.body-content', { timeout: 25000 }).should('contain', 'x-test-api');
+    });
+
+    // ────────────────────────────────────────────
+    // 2. JSON BODY
+    // ────────────────────────────────────────────
+    it('Deve enviar JSON no Body', () => {
+        cy.get('.method-select').select('POST');
+        cy.get('.tab').contains('Payload / Body').click();
+        cy.contains('label', 'JSON').click();
+
+        // O CodeMirror do body está dentro de um div com background #282c34, não tem classe customizada
+        // Primeiro .cm-content na página é o editor de Body
+        cy.get('.cm-content').first().focus().clear().type('{"key": "json_val"}', { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/post`, { parseSpecialCharSequences: false });
+        cy.contains('button', 'Fazer Disparo').click({ force: true });
+        cy.get('.body-content', { timeout: 25000 }).should('contain', 'json_val');
+    });
+
+    // ────────────────────────────────────────────
+    // 3. FORM-DATA
+    // ────────────────────────────────────────────
+    it('Deve enviar FORM-DATA', () => {
+        cy.get('.method-select').select('POST');
+        cy.get('.tab').contains('Payload / Body').click();
+        cy.contains('label', 'FORM-DATA').click();
+
+        // Botão correto: "Adicionar Campo"
+        cy.contains('button', 'Adicionar Campo').click();
+        cy.get('input[placeholder="Key"]').last().type('fd_key', { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="Value"]').last().type('fd_val', { parseSpecialCharSequences: false });
+
+        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/post`, { parseSpecialCharSequences: false });
+        cy.contains('button', 'Fazer Disparo').click({ force: true });
+        cy.get('.body-content', { timeout: 25000 }).should('contain', 'fd_key').and('contain', 'fd_val');
+    });
+
+    // ────────────────────────────────────────────
+    // 4. URL-ENCODED
+    // ────────────────────────────────────────────
+    it('Deve enviar x-www-form-urlencoded', () => {
+        cy.get('.method-select').select('POST');
+        cy.get('.tab').contains('Payload / Body').click();
+        cy.contains('label', 'x-www-form-urlencoded').click();
+
+        // Botão correto: "Adicionar Par Chave/Valor" (diferente do FORM-DATA!)
+        cy.contains('button', 'Adicionar Par Chave/Valor').click();
+        cy.get('input[placeholder="Key"]').last().type('url_key', { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="Value"]').last().type('url_val', { parseSpecialCharSequences: false });
+
+        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/post`, { parseSpecialCharSequences: false });
+        cy.contains('button', 'Fazer Disparo').click({ force: true });
+        cy.get('.body-content', { timeout: 25000 }).should('contain', 'url_key').and('contain', 'url_val');
+    });
+
+    // ────────────────────────────────────────────
+    // 5. VARIÁVEIS GLOBAIS
+    // ────────────────────────────────────────────
+    it('Deve injetar variáveis Globais no fluxo', () => {
+        cy.get('button[title="Gerenciar Ambientes"]').click();
+        cy.get('.modal-content').should('be.visible');
+
+        cy.contains('button', 'Adicionar Linha').click();
+        cy.get('input[placeholder="Chave"]').last().type('env_host', { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="Valor"]').last().type(POSTMAN_ECHO, { parseSpecialCharSequences: false });
+        cy.contains('button', 'Concluir Setup').click();
+
+        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type('{{env_host}}/get', { parseSpecialCharSequences: false });
+        cy.contains('button', 'Fazer Disparo').click({ force: true });
+        cy.get('.status-badge', { timeout: 25000 }).should('contain', '200');
+    });
+
+    // ────────────────────────────────────────────
+    // 6. SCRIPT DA PASTA
+    // ────────────────────────────────────────────
+    it('Deve executar Script de Setup da Pasta e validar Log', () => {
+        cy.get('.sidebar-tree-container').contains('Meu Servidor/Projeto', { timeout: 10000 }).click({ force: true });
+
+        cy.contains('h3', 'Script JS').should('be.visible');
+        cy.get('.cm-content').last().focus().clear().type('getman.log("CY_FOLDER_OK");', { parseSpecialCharSequences: false });
+        cy.contains('button', 'Executar Script Manualmente').click();
+
+        // O console da pasta usa classe .console-panel (não .response-panel!)
+        cy.get('.console-panel', { timeout: 15000 }).should('contain', 'CY_FOLDER_OK');
+    });
+
+    // ────────────────────────────────────────────
+    // 7. RESPONSE HEADERS + CONSOLE
+    // ────────────────────────────────────────────
+    it('Deve validar Abas de Response Headers e Console', () => {
+        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/get`, { parseSpecialCharSequences: false });
+        cy.contains('button', 'Fazer Disparo').click({ force: true });
+        cy.get('.status-badge', { timeout: 25000 }).should('be.visible');
+
+        // Headers da resposta (classe: div.response-panel.body-content com um .headers-grid dentro)
+        cy.get('.tab').contains('Response Headers').click();
+        cy.get('.body-content .headers-grid', { timeout: 15000 }).should('exist');
+
+        // Console / Timestamps (classe: div.console-panel.body-content com renderConsole)
+        cy.get('.tab').contains('Console / Timestamps').click();
+        cy.get('.console-panel', { timeout: 15000 }).should('contain', 'REQUISIÇÃO');
+    });
+});

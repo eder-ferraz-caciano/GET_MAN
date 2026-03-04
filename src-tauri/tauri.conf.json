@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "get-man",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "identifier": "com.getman.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "GET MAN",
+        "dragDropEnabled": false,
         "width": 1280,
         "height": 800,
         "resizable": true,
