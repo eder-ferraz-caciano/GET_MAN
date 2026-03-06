@@ -1,7 +1,7 @@
 {
   "name": "get-man",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "GET MAN — A modern, lightweight, open-source API client for Desktop. A fast alternative to Postman and Insomnia built with Tauri, React and TypeScript. Supports REST API testing, environment variables, pre-request scripts, and more.",
   "author": "Eder Ferraz Caciano",
   "license": "MIT",
