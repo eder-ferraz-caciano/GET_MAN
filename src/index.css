@@ -982,6 +982,206 @@ body.dragging-active .tree-item * {
   z-index: 1;
 }
 
+/* ────── WORKSPACE NODE (TREE) ────── */
+.tree-item.workspace-node {
+  background: rgba(99, 102, 241, 0.04);
+  border: 1px solid rgba(99, 102, 241, 0.08);
+  border-radius: var(--radius-md);
+  margin-bottom: 6px;
+  margin-top: 4px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.tree-item.workspace-node:hover {
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.15);
+}
+
+.tree-item.workspace-node.active-node {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.25);
+  box-shadow: inset 3px 0 0 var(--accent-primary), 0 2px 8px rgba(99, 102, 241, 0.1);
+}
+
+.workspace-env-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.workspace-env-badge .env-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 4px var(--success);
+}
+
+.workspace-env-badge.no-env {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.workspace-env-badge.no-env .env-dot {
+  background: var(--text-muted);
+  box-shadow: none;
+}
+
+/* ────── WORKSPACE CONFIG TABS ────── */
+.ws-config-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.15);
+  padding: 0;
+}
+
+.ws-config-tab {
+  padding: 14px 20px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.ws-config-tab:hover {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.ws-config-tab.active {
+  color: var(--accent-primary);
+  border-bottom-color: var(--accent-primary);
+  background: rgba(99, 102, 241, 0.04);
+}
+
+.ws-config-tab .tab-count {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ws-config-tab.active .tab-count {
+  background: var(--accent-primary);
+  color: #fff;
+}
+
+/* ────── WORKSPACE ENV EDITOR (INLINE) ────── */
+.ws-env-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ws-env-sidebar {
+  width: 240px;
+  border-right: 1px solid var(--border-subtle);
+  background: rgba(18, 19, 28, 0.3);
+  padding: 12px 0;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.ws-env-sidebar-header {
+  padding: 0 14px;
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.ws-env-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: all 0.15s;
+  border-left: 2px solid transparent;
+}
+
+.ws-env-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+}
+
+.ws-env-item.active {
+  background: rgba(99, 102, 241, 0.08);
+  color: var(--text-primary);
+  border-left-color: var(--accent-primary);
+}
+
+.ws-env-item .env-active-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ws-env-editor {
+  flex: 1;
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+
+.ws-env-editor-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.ws-env-editor-header input {
+  font-size: 18px;
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid var(--border-strong);
+  border-radius: 0;
+  padding: 4px 0;
+  color: var(--text-primary);
+  flex: 1;
+  transition: border-color 0.2s;
+}
+
+.ws-env-editor-header input:focus {
+  border-bottom-color: var(--accent-primary);
+  outline: none;
+}
+
 /* --- JSON FORMATTER --- */
 pre.json-viewer {
   background: rgba(0, 0, 0, 0.4);

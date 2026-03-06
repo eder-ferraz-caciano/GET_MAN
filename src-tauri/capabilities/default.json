@@ -8,7 +8,15 @@
   "permissions": [
     "core:default",
     "dialog:default",
+    "dialog:allow-save",
+    "dialog:allow-open",
     "fs:default",
+    "fs:allow-write-file",
+    "fs:allow-read-file",
+    "fs:allow-exists",
+    "fs:allow-desktop-write",
+    "fs:allow-document-write",
+    "fs:allow-download-write",
     {
       "identifier": "http:default",
       "allow": [

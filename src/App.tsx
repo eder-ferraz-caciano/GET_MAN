@@ -80,6 +80,8 @@ interface RequestModel {
   url: string;
   auth: AuthConfig;
   headers: RequestHeader[];
+  queryParams: RequestHeader[];
+  params: RequestHeader[];
   body: string;
   bodyType: RequestBodyType;
   formData: FormDataField[];
@@ -99,7 +101,7 @@ interface RequestModel {
 interface CollectionNode {
   id: string;
   name: string;
-  type: 'folder' | 'request';
+  type: 'folder' | 'request' | 'workspace';
   children?: CollectionNode[];
   request?: RequestModel;
   folderConfig?: {
@@ -107,6 +109,11 @@ interface CollectionNode {
     variables?: EnvVar[];
     setupScript?: string;
     headers?: RequestHeader[];
+  };
+  workspaceConfig?: {
+    environments: Environment[];
+    activeEnvironmentId: string | null;
+    history: HistoryEntry[];
   };
   expanded?: boolean;
   savedLogs?: LogEntry[];
@@ -120,7 +127,8 @@ interface LogEntry {
   data?: any;
 }
 
-interface Workspace {
+// Legacy interface for migration
+interface LegacyWorkspace {
   id: string;
   name: string;
   collection: CollectionNode[];
@@ -150,6 +158,8 @@ const defaultRequest: RequestModel = {
     { id: uuidv4(), key: 'Content-Type', value: 'application/json', enabled: true },
     { id: uuidv4(), key: 'Accept', value: 'application/json', enabled: true }
   ],
+  queryParams: [],
+  params: [],
   body: '',
   bodyType: 'json',
   formData: [],
@@ -162,24 +172,84 @@ const defaultFolderAuth: AuthConfig = {
 
 const initialCollection: CollectionNode[] = [
   {
-    id: '1',
-    name: 'Meu Servidor/Projeto',
-    type: 'folder',
+    id: 'ws_default',
+    name: 'Workspace Padrão',
+    type: 'workspace',
     expanded: true,
-    folderConfig: {
-      auth: { type: 'bearer', token: '{{token_acesso}}' },
-      variables: []
+    workspaceConfig: {
+      environments: [
+        { id: 'env_dev', name: 'Ambiente DEV', variables: [{ id: uuidv4(), key: 'base_url', value: 'http://localhost:3000' }] },
+        { id: 'env_prod', name: 'Ambiente PROD', variables: [{ id: uuidv4(), key: 'base_url', value: 'https://api.myapp.com' }] }
+      ],
+      activeEnvironmentId: 'env_dev',
+      history: []
     },
     children: [
       {
-        id: '1a',
-        name: 'Listar Dados (Rota GET)',
-        type: 'request',
-        request: { ...defaultRequest, id: '1a', name: 'Listar Dados (Rota GET)', headers: defaultRequest.headers.map(h => ({ ...h })) }
+        id: '1',
+        name: 'Meu Servidor/Projeto',
+        type: 'folder',
+        expanded: true,
+        folderConfig: {
+          auth: { type: 'bearer', token: '{{token_acesso}}' },
+          variables: []
+        },
+        children: [
+          {
+            id: '1a',
+            name: 'Listar Dados (Rota GET)',
+            type: 'request',
+            request: { ...defaultRequest, id: '1a', name: 'Listar Dados (Rota GET)', headers: defaultRequest.headers.map(h => ({ ...h })) }
+          }
+        ]
       }
     ]
   }
 ];
+
+// Migration helper: convert legacy workspace format to new tree format
+const migrateWorkspacesToTreeFormat = (): CollectionNode[] | null => {
+  const savedV2 = localStorage.getItem('getman_collection_v2');
+  if (savedV2) return JSON.parse(savedV2);
+
+  const savedOldWs = localStorage.getItem('getman_workspaces');
+  if (savedOldWs) {
+    const oldWorkspaces: LegacyWorkspace[] = JSON.parse(savedOldWs);
+    return oldWorkspaces.map(ws => ({
+      id: ws.id,
+      name: ws.name,
+      type: 'workspace' as const,
+      expanded: true,
+      workspaceConfig: {
+        environments: ws.environments || [],
+        activeEnvironmentId: ws.activeEnvironmentId,
+        history: ws.history || []
+      },
+      children: ws.collection || []
+    }));
+  }
+
+  // Try old single-collection format
+  const oldCol = localStorage.getItem('getman_collection');
+  const oldEnvs = localStorage.getItem('getman_envs');
+  const oldActiveEnv = localStorage.getItem('getman_env_active');
+  if (oldCol) {
+    return [{
+      id: 'ws_default',
+      name: 'Workspace Padrão',
+      type: 'workspace' as const,
+      expanded: true,
+      workspaceConfig: {
+        environments: oldEnvs ? JSON.parse(oldEnvs) : [],
+        activeEnvironmentId: oldActiveEnv || null,
+        history: []
+      },
+      children: JSON.parse(oldCol)
+    }];
+  }
+
+  return null;
+};
 
 const renderOAuth2Fields = (config: AuthConfig['oauth2Config'], onChange: (updates: Partial<AuthConfig['oauth2Config']>) => void) => {
   const c = config || { clientId: '', clientSecret: '', accessTokenUrl: '', authUrl: '', scope: '', accessToken: '' };
@@ -205,87 +275,172 @@ const renderOAuth2Fields = (config: AuthConfig['oauth2Config'], onChange: (updat
   );
 };
 
+// URL Synchronization Helpers
+const syncQueryParamsToUrl = (url: string, queryParams: RequestHeader[]) => {
+  try {
+    const baseUrl = url.split('?')[0];
+    const searchParams = new URLSearchParams();
+    (queryParams || []).forEach(q => {
+      if (q.enabled && q.key.trim()) {
+        searchParams.append(q.key.trim(), q.value);
+      }
+    });
+    const queryString = searchParams.toString();
+    return queryString ? `${baseUrl}?${queryString}` : baseUrl;
+  } catch {
+    return url;
+  }
+};
+
+const syncUrlToQueryParams = (url: string, currentQueries: RequestHeader[]) => {
+  try {
+    const queryString = url.split('?')[1] || '';
+    if (!queryString && url.indexOf('?') === -1) return (currentQueries || []).filter(q => !q.enabled);
+
+    const params = new URLSearchParams(queryString);
+    const newQueries: RequestHeader[] = [];
+    const seen = new Set();
+
+    params.forEach((value, key) => {
+      const existing = (currentQueries || []).find(q => q.key === key && q.value === value && q.enabled && !seen.has(q.id));
+      const id = existing?.id || uuidv4();
+      newQueries.push({ id, key, value, enabled: true });
+      seen.add(id);
+    });
+
+    (currentQueries || []).forEach(q => {
+      if (!q.enabled) newQueries.push(q);
+    });
+
+    return newQueries;
+  } catch {
+    return currentQueries;
+  }
+};
+
+const syncUrlToPathParams = (url: string, currentParams: RequestHeader[]) => {
+  const matches = url.match(/:([a-zA-Z0-9_-]+)/g) || [];
+  const matches2 = url.match(/\{([a-zA-Z0-9_-]+)\}/g) || [];
+  const keys = [...new Set([
+    ...matches.map(m => m.substring(1)),
+    ...matches2.map(m => m.substring(1, m.length - 1))
+  ])];
+
+  const newParams: RequestHeader[] = [];
+  keys.forEach(key => {
+    const existing = (currentParams || []).find(p => p.key === key);
+    newParams.push({
+      id: existing?.id || uuidv4(),
+      key,
+      value: existing?.value || '',
+      enabled: true
+    });
+  });
+  return newParams;
+};
+
 export default function App() {
   // ---------------------------------------------------------
-  // WORKSPACE ENGINE
+  // COLLECTION ENGINE (Workspaces are root nodes in tree)
   // ---------------------------------------------------------
-  const [workspaces, setWorkspaces] = useState<Workspace[]>(() => {
-    const saved = localStorage.getItem('getman_workspaces');
-    if (saved) return JSON.parse(saved);
-
-    // Migration: Migrate old non-workspace data to a first workspace
-    const oldCol = localStorage.getItem('getman_collection');
-    const oldEnvs = localStorage.getItem('getman_envs');
-    const oldActiveEnv = localStorage.getItem('getman_env_active');
-
-    return [{
-      id: 'ws_default',
-      name: 'Workspace Padrão',
-      collection: oldCol ? JSON.parse(oldCol) : initialCollection,
-      environments: oldEnvs ? JSON.parse(oldEnvs) : [
-        { id: 'env_dev', name: 'Ambiente DEV', variables: [{ id: uuidv4(), key: 'base_url', value: 'http://localhost:3000' }] },
-        { id: 'env_prod', name: 'Ambiente PROD', variables: [{ id: uuidv4(), key: 'base_url', value: 'https://api.myapp.com' }] }
-      ],
-      activeEnvironmentId: oldActiveEnv || 'env_dev',
-      history: []
-    }];
+  const [collection, setCollection] = useState<CollectionNode[]>(() => {
+    const migrated = migrateWorkspacesToTreeFormat();
+    return migrated || initialCollection;
   });
 
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>(() => {
-    return localStorage.getItem('getman_active_ws') || workspaces[0].id;
-  });
-
-  const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || workspaces[0];
-
-  // These states are now "synced" with the active workspace
-  const [collection, setCollection] = useState<CollectionNode[]>(activeWorkspace.collection);
-  const [environments, setEnvironments] = useState<Environment[]>(activeWorkspace.environments);
-  const [activeEnvironmentId, setActiveEnvironmentId] = useState<string | null>(activeWorkspace.activeEnvironmentId);
-  const [history, setHistory] = useState<HistoryEntry[]>(activeWorkspace.history || []);
   const [sidebarTab, setSidebarTab] = useState<'collection' | 'history'>('collection');
+  const [treeSearchQuery, setTreeSearchQuery] = useState('');
   const [globalVariables, setGlobalVariables] = useState<EnvVar[]>(() => {
     const saved = localStorage.getItem('getman_globals');
     return saved ? JSON.parse(saved) : [];
   });
 
-  // Sync state back to workspaces array when values change
-  useEffect(() => {
-    setWorkspaces(prev => prev.map(w => w.id === activeWorkspaceId ? { ...w, collection, environments, activeEnvironmentId, history } : w));
-  }, [collection, environments, activeEnvironmentId, history, activeWorkspaceId]);
-
-  // Handle Workspace Switching
-  const handleWorkspaceChange = (wsId: string) => {
-    const ws = workspaces.find(w => w.id === wsId);
-    if (ws) {
-      setActiveWorkspaceId(wsId);
-      setCollection(ws.collection);
-      setEnvironments(ws.environments);
-      setActiveEnvironmentId(ws.activeEnvironmentId);
-      setHistory(ws.history || []);
-      setActiveNodeId(null); // Reset selection on switch
+  // --- Workspace Context Helpers ---
+  const findParentWorkspace = (nodeId: string, nodes: CollectionNode[] = collection): CollectionNode | null => {
+    for (const node of nodes) {
+      if (node.type === 'workspace') {
+        // Check if nodeId is this workspace or inside it
+        if (node.id === nodeId) return node;
+        if (node.children) {
+          const found = getActiveNode(node.children, nodeId);
+          if (found) return node;
+        }
+      }
     }
+    return null;
+  };
+
+  const getActiveEnvironment = (nodeId: string): Environment | null => {
+    const ws = findParentWorkspace(nodeId);
+    if (!ws?.workspaceConfig) return null;
+    return ws.workspaceConfig.environments.find(e => e.id === ws.workspaceConfig!.activeEnvironmentId) || null;
+  };
+
+  const getWorkspaceEnvironments = (nodeId: string): Environment[] => {
+    const ws = findParentWorkspace(nodeId);
+    return ws?.workspaceConfig?.environments || [];
+  };
+
+  const getWorkspaceActiveEnvId = (nodeId: string): string | null => {
+    const ws = findParentWorkspace(nodeId);
+    return ws?.workspaceConfig?.activeEnvironmentId || null;
+  };
+
+  const setWorkspaceActiveEnvId = (wsId: string, envId: string | null) => {
+    updateNodeInCollection(wsId, (node) => {
+      if (node.type !== 'workspace' || !node.workspaceConfig) return node;
+      return {
+        ...node,
+        workspaceConfig: { ...node.workspaceConfig, activeEnvironmentId: envId }
+      };
+    });
+  };
+
+  const getWorkspaceHistory = (nodeId: string): HistoryEntry[] => {
+    const ws = findParentWorkspace(nodeId);
+    return ws?.workspaceConfig?.history || [];
+  };
+
+  const addWorkspaceHistoryEntry = (nodeId: string, entry: HistoryEntry) => {
+    const ws = findParentWorkspace(nodeId);
+    if (!ws) return;
+    updateNodeInCollection(ws.id, (node) => {
+      if (node.type !== 'workspace' || !node.workspaceConfig) return node;
+      return {
+        ...node,
+        workspaceConfig: {
+          ...node.workspaceConfig,
+          history: [entry, ...(node.workspaceConfig.history || [])].slice(0, 50)
+        }
+      };
+    });
   };
 
   const addWorkspace = () => {
     const name = prompt('Nome do novo Workspace:', 'Novo Workspace');
     if (!name) return;
-    const newWs: Workspace = {
+    const newWs: CollectionNode = {
       id: uuidv4(),
       name,
-      collection: [{ id: uuidv4(), name: 'Nova Pasta', type: 'folder', children: [], folderConfig: { auth: { type: 'none' } } }],
-      environments: [{ id: uuidv4(), name: 'Produção', variables: [] }],
-      activeEnvironmentId: null
+      type: 'workspace',
+      expanded: true,
+      workspaceConfig: {
+        environments: [{ id: uuidv4(), name: 'Produção', variables: [] }],
+        activeEnvironmentId: null,
+        history: []
+      },
+      children: [{ id: uuidv4(), name: 'Nova Pasta', type: 'folder', children: [], folderConfig: { auth: { type: 'none' } } }]
     };
-    setWorkspaces(prev => [...prev, newWs]);
-    handleWorkspaceChange(newWs.id);
+    setCollection(prev => [...prev, newWs]);
   };
 
   // Default to null to show welcome screen initially
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
 
   // Tabs
-  const [activeReqTab, setActiveReqTab] = useState<'auth' | 'headers' | 'body'>('auth');
+  const [activeReqTab, setActiveReqTab] = useState<'auth' | 'headers' | 'body' | 'params' | 'queries'>('auth');
   const [activeFolderSettingTab, setActiveFolderSettingTab] = useState<'auth' | 'vars' | 'headers'>('auth');
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<'environments' | 'globals' | 'summary'>('environments');
   const [activeResTab, setActiveResTab] = useState<'response' | 'headers' | 'console'>('response');
 
   const [loading, setLoading] = useState(false);
@@ -312,7 +467,6 @@ export default function App() {
 
   const [isEnvModalOpen, setIsEnvModalOpen] = useState(false);
   const [editingEnvId, setEditingEnvId] = useState<string | null>(null);
-  const [isEnvDropdownOpen, setIsEnvDropdownOpen] = useState(false);
   const [isCodeModalOpen, setIsCodeModalOpen] = useState(false);
   const [codeSnippetLang, setCodeSnippetLang] = useState('curl');
 
@@ -322,7 +476,7 @@ export default function App() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Layout & Drag and Drop
-  const [leftPanelWidth, setLeftPanelWidth] = useState(500);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(800);
   const isResizing = useRef(false);
   const draggedNodeIdRef = useRef<string | null>(null);
   const [dragOverInfo, setDragOverInfo] = useState<{ id: string, position: 'top' | 'bottom' | 'inside' } | null>(null);
@@ -330,7 +484,7 @@ export default function App() {
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing.current) return;
-      setLeftPanelWidth(Math.max(400, e.clientX - 350)); // 350 sidebar width
+      setLeftPanelWidth(Math.max(400, e.clientX - 280)); // 280 sidebar width
     };
     const handleMouseUp = () => {
       if (isResizing.current) {
@@ -410,7 +564,7 @@ export default function App() {
         const findAndInsert = (list: CollectionNode[]): boolean => {
           for (let i = 0; i < list.length; i++) {
             if (list[i].id === targetId) {
-              if (asChild && list[i].type === 'folder') {
+              if (asChild && (list[i].type === 'folder' || list[i].type === 'workspace')) {
                 list[i].children = [...(list[i].children || []), nodeToMove];
                 list[i].expanded = true;
               } else {
@@ -436,7 +590,7 @@ export default function App() {
 
   const addLog = (type: LogEntry['type'], message: string, data?: any) => {
     const newLog: LogEntry = { id: uuidv4(), timestamp: new Date(), type, message, data };
-    console.log(`[LOG] ${type.toUpperCase()}: ${message}`, data || '');
+
 
     if (!activeNodeId) return;
 
@@ -469,10 +623,9 @@ export default function App() {
 
   // Persist State
   useEffect(() => {
-    localStorage.setItem('getman_workspaces', JSON.stringify(workspaces));
-    localStorage.setItem('getman_active_ws', activeWorkspaceId);
+    localStorage.setItem('getman_collection_v2', JSON.stringify(collection));
     localStorage.setItem('getman_globals', JSON.stringify(globalVariables));
-  }, [workspaces, activeWorkspaceId, globalVariables]);
+  }, [collection, globalVariables]);
 
   // Loop Engine (Automation)
   useEffect(() => {
@@ -574,9 +727,20 @@ export default function App() {
     if (!activeNodeId) return;
     updateNodeInCollection(activeNodeId, (node) => {
       if (node.type !== 'request' || !node.request) return node;
+
+      let nextReq = { ...node.request, ...updates };
+
+      // Two-way synchronization
+      if (updates.url !== undefined) {
+        nextReq.queryParams = syncUrlToQueryParams(updates.url, nextReq.queryParams);
+        nextReq.params = syncUrlToPathParams(updates.url, nextReq.params);
+      } else if (updates.queryParams !== undefined) {
+        nextReq.url = syncQueryParamsToUrl(nextReq.url, updates.queryParams);
+      }
+
       return {
         ...node,
-        request: { ...node.request, ...updates }
+        request: nextReq
       };
     });
   };
@@ -601,17 +765,25 @@ export default function App() {
     setCollection(updateNode(collection));
   };
 
-  const addFolder = () => {
+  const addFolderTo = (parentId: string) => {
     const newFolder: CollectionNode = {
       id: uuidv4(),
-      name: 'Novo Servidor/Pasta',
+      name: 'Nova Pasta',
       type: 'folder',
       expanded: true,
       children: [],
       folderConfig: { auth: { ...defaultFolderAuth }, variables: [] }
     };
-    setCollection([...collection, newFolder]);
-    addLog('info', '📁 Nova pasta raiz criada');
+    const updateNode = (nodes: CollectionNode[]): CollectionNode[] => nodes.map(node => {
+      if (node.id === parentId) {
+        return { ...node, expanded: true, children: [...(node.children || []), newFolder] };
+      }
+      if (node.children) return { ...node, children: updateNode(node.children) };
+      return node;
+    });
+    setCollection(updateNode(collection));
+    setActiveNodeId(newFolder.id);
+    addLog('info', '📁 Nova pasta criada');
   };
 
   const generateCrudExample = () => {
@@ -672,17 +844,21 @@ getman.log("Token renovado e salvo na pasta!");`;
       }
     };
 
-    setCollection([...collection, newFolder]);
+    // Add CRUD folder to first workspace
+    const firstWs = collection.find(n => n.type === 'workspace');
+    if (firstWs) {
+      const updateNode = (nodes: CollectionNode[]): CollectionNode[] => nodes.map(node => {
+        if (node.id === firstWs.id) {
+          return { ...node, expanded: true, children: [...(node.children || []), newFolder] };
+        }
+        return node;
+      });
+      setCollection(updateNode(collection));
+    } else {
+      setCollection([...collection, newFolder]);
+    }
     setActiveNodeId(folderId);
     addLog('success', '🚀 Template de Usuários e Login gerado com Sucesso!');
-  };
-
-  const addRequestToRoot = () => {
-    const req = { ...defaultRequest, id: uuidv4(), name: 'Nova Rota Solta' };
-    const newNode: CollectionNode = { id: req.id, name: req.name, type: 'request', request: req };
-    setCollection([...collection, newNode]);
-    setActiveNodeId(req.id);
-    addLog('success', '📄 Nova rota criada');
   };
 
   const addRequestToFolder = (folderId: string) => {
@@ -805,7 +981,7 @@ getman.log("Token renovado e salvo na pasta!");`;
     const MAX_ITERATIONS = 5;
 
     const path = getPath(collection, targetNodeId, []);
-    const activeEnv = environments.find(e => e.id === activeEnvironmentId);
+    const activeEnv = getActiveEnvironment(targetNodeId);
 
     while (result.includes('{{') && iterations < MAX_ITERATIONS) {
       const nextResult = result.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
@@ -881,7 +1057,42 @@ getman.log("Token renovado e salvo na pasta!");`;
   };
 
   const generateCodeSnippet = (req: RequestModel, lang: string): string => {
-    const targetUrl = applyVariables(req.url, req.id);
+    let targetUrl = applyVariables(req.url, req.id);
+
+    // Apply Path Params first
+    (req.params || []).forEach(p => {
+      if (p.enabled && p.key.trim()) {
+        const key = p.key.trim();
+        const value = applyVariables(p.value.trim(), req.id);
+        targetUrl = targetUrl.replace(new RegExp(`:${key}`, 'g'), value);
+        targetUrl = targetUrl.replace(new RegExp(`{${key}}`, 'g'), value);
+      }
+    });
+
+    // Rebuild Query String to avoid duplication
+    try {
+      const parts = targetUrl.split('?');
+      const baseUrlForSnip = parts[0];
+      const urlObjForSnippet = new URL(baseUrlForSnip.includes('://') ? baseUrlForSnip : `http://localhost/${baseUrlForSnip}`);
+
+      // Clear all existing search params
+      urlObjForSnippet.search = '';
+
+      (req.queryParams || []).forEach(q => {
+        if (q.enabled && q.key.trim()) {
+          urlObjForSnippet.searchParams.append(applyVariables(q.key.trim(), req.id), applyVariables(q.value.trim(), req.id));
+        }
+      });
+
+      if (!targetUrl.includes('://')) {
+        targetUrl = urlObjForSnippet.toString().replace('http://localhost/', '');
+      } else {
+        targetUrl = urlObjForSnippet.toString();
+      }
+    } catch (e) {
+      // Fallback
+    }
+
     const resolvedAuth = resolveAuth(req.id, collection);
     const fetchHeaders: Record<string, string> = {};
 
@@ -940,7 +1151,42 @@ getman.log("Token renovado e salvo na pasta!");`;
     const startTime = Date.now();
 
     // Apply Vars to URL
-    const targetUrl = applyVariables(activeReq.url, activeReq.id);
+    let targetUrl = applyVariables(activeReq.url, activeReq.id);
+
+    // 1. Resolve Path Params
+    (activeReq.params || []).forEach(p => {
+      if (p.enabled && p.key.trim()) {
+        const key = p.key.trim();
+        const value = applyVariables(p.value.trim(), activeReq.id);
+        // Replace :key or {key}
+        targetUrl = targetUrl.replace(new RegExp(`:${key}`, 'g'), value);
+        targetUrl = targetUrl.replace(new RegExp(`{${key}}`, 'g'), value);
+      }
+    });
+
+    // 2. Resolve Query Params (Rebuilding searching params to avoid duplicates)
+    try {
+      const parts = targetUrl.split('?');
+      const baseUrlOnly = parts[0];
+      const urlObjForQueries = new URL(baseUrlOnly.includes('://') ? baseUrlOnly : `http://localhost/${baseUrlOnly}`);
+
+      // Reset params and rebuild from our source of truth
+      urlObjForQueries.search = '';
+
+      (activeReq.queryParams || []).forEach(q => {
+        if (q.enabled && q.key.trim()) {
+          urlObjForQueries.searchParams.append(applyVariables(q.key.trim(), activeReq.id), applyVariables(q.value.trim(), activeReq.id));
+        }
+      });
+
+      if (!targetUrl.includes('://')) {
+        targetUrl = urlObjForQueries.toString().replace('http://localhost/', '');
+      } else {
+        targetUrl = urlObjForQueries.toString();
+      }
+    } catch (e) {
+      // Fallback
+    }
 
     addLog('info', ` INICIANDO REQUISIÇÃO: ${activeReq.method} ${targetUrl}`);
 
@@ -1142,7 +1388,7 @@ getman.log("Token renovado e salvo na pasta!");`;
         timestamp: new Date().toISOString(),
         status: res.status
       };
-      setHistory(prev => [newHistoryEntry, ...prev].slice(0, 50));
+      addWorkspaceHistoryEntry(activeReq.id, newHistoryEntry);
 
       const resOutput: any = {
         Status: `${res.status} ${res.statusText || ''}`.trim(),
@@ -1178,7 +1424,7 @@ getman.log("Token renovado e salvo na pasta!");`;
         timestamp: new Date().toISOString(),
         status: 0
       };
-      setHistory(prev => [errHistoryEntry, ...prev].slice(0, 50));
+      addWorkspaceHistoryEntry(activeReq.id, errHistoryEntry);
 
       const errOutput = {
         Status: "0 Network Error",
@@ -1215,15 +1461,24 @@ getman.log("Token renovado e salvo na pasta!");`;
             return;
           }
           const finalVal = String(value);
-          if (activeEnvironmentId) {
-            setEnvironments(envs => envs.map(env => {
-              if (env.id === activeEnvironmentId) {
-                const exists = env.variables.find(v => v.key === key);
-                if (exists) return { ...env, variables: env.variables.map(v => v.key === key ? { ...v, value: finalVal } : v) };
-                return { ...env, variables: [...env.variables, { id: uuidv4(), key, value: finalVal }] };
-              }
-              return env;
-            }));
+          const wsNode = findParentWorkspace(nodeId);
+          const wsEnvId = wsNode?.workspaceConfig?.activeEnvironmentId;
+          if (wsNode && wsEnvId) {
+            updateNodeInCollection(wsNode.id, (wsN) => {
+              if (wsN.type !== 'workspace' || !wsN.workspaceConfig) return wsN;
+              return {
+                ...wsN,
+                workspaceConfig: {
+                  ...wsN.workspaceConfig,
+                  environments: wsN.workspaceConfig.environments.map(env => {
+                    if (env.id !== wsEnvId) return env;
+                    const exists = env.variables.find(v => v.key === key);
+                    if (exists) return { ...env, variables: env.variables.map(v => v.key === key ? { ...v, value: finalVal } : v) };
+                    return { ...env, variables: [...env.variables, { id: uuidv4(), key, value: finalVal }] };
+                  })
+                }
+              };
+            });
             addLog('success', `🧩 [getman] Variável de Ambiente '${key}' salva! (Valor: ${finalVal.substring(0, 10)}...)`);
           } else {
             setGlobalVariables(globals => {
@@ -1314,17 +1569,27 @@ getman.log("Token renovado e salvo na pasta!");`;
     }
   };
 
-  const exportCollection = () => {
-    // Export collection, environments, globals
-    const db = { collection, globals: globalVariables, environments };
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(db, null, 2));
-    const fnNode = document.createElement('a');
-    fnNode.setAttribute("href", dataStr);
-    fnNode.setAttribute("download", "getman_workspace.json");
-    document.body.appendChild(fnNode);
-    fnNode.click();
-    fnNode.remove();
-    addLog('success', '💾 Workspace exportado com sucesso (.json)');
+  const exportCollection = async () => {
+    try {
+      // Export collection (workspaces are inside), and globals
+      const db = { collection, globals: globalVariables };
+      const content = JSON.stringify(db, null, 2);
+
+      const filePath = await tauriSave({
+        filters: [{ name: 'GetMan Workspace', extensions: ['json'] }],
+        defaultPath: 'getman_workspace.json'
+      });
+
+      if (filePath) {
+        const encoder = new TextEncoder();
+        await tauriWriteFile(filePath, encoder.encode(content));
+        addLog('success', `💾 Workspace exportado com sucesso em: ${filePath}`);
+      }
+    } catch (err: any) {
+      console.error('Export error:', err);
+      const msg = err?.message || (typeof err === 'string' ? err : JSON.stringify(err)) || 'Unknown Error';
+      addLog('error', `❌ Falha ao exportar workspace: ${msg}`);
+    }
   };
 
   const importCollection = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1337,8 +1602,8 @@ getman.log("Token renovado e salvo na pasta!");`;
         if (obj.collection) {
           setCollection(obj.collection);
           if (obj.globals) setGlobalVariables(obj.globals);
-          if (obj.environments) setEnvironments(obj.environments);
         } else {
+          // Legacy: raw collection array without wrapper
           setCollection(obj);
         }
 
@@ -1366,13 +1631,19 @@ getman.log("Token renovado e salvo na pasta!");`;
       const { data, type, contentType } = activeReq.savedResponse;
       let extension = 'txt';
       if (type === 'json') extension = 'json';
-      else if (type === 'image') extension = contentType?.split('/')[1] || 'png';
+      else if (type === 'image') {
+        const subType = contentType?.split('/')[1]?.split(';')[0] || 'png';
+        extension = subType;
+      }
       else if (type === 'pdf') extension = 'pdf';
       else if (type === 'html') extension = 'html';
 
+      // Clean name for filename
+      const safeName = activeReq.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+
       const filePath = await tauriSave({
         filters: [{ name: 'Arquivo de Resposta', extensions: [extension] }],
-        defaultPath: `response_${activeReq.name}.${extension}`
+        defaultPath: `response_${safeName}.${extension}`
       });
 
       if (filePath) {
@@ -1625,14 +1896,38 @@ getman.log("Token renovado e salvo na pasta!");`;
   };
 
   const removeEnv = (eId: string) => {
-    setEnvironments(envs => envs.filter(e => e.id !== eId));
-    if (activeEnvironmentId === eId) setActiveEnvironmentId(null);
+    if (!activeNodeId) return;
+    const ws = findParentWorkspace(activeNodeId);
+    if (!ws) return;
+    updateNodeInCollection(ws.id, (node) => {
+      if (node.type !== 'workspace' || !node.workspaceConfig) return node;
+      return {
+        ...node,
+        workspaceConfig: {
+          ...node.workspaceConfig,
+          environments: node.workspaceConfig.environments.filter(e => e.id !== eId),
+          activeEnvironmentId: node.workspaceConfig.activeEnvironmentId === eId ? null : node.workspaceConfig.activeEnvironmentId
+        }
+      };
+    });
     if (editingEnvId === eId) setEditingEnvId(null);
   };
 
   const addEnv = () => {
+    if (!activeNodeId) return;
+    const ws = findParentWorkspace(activeNodeId);
+    if (!ws) return;
     const freshId = uuidv4();
-    setEnvironments([...environments, { id: freshId, name: 'Novo Ambiente', variables: [] }]);
+    updateNodeInCollection(ws.id, (node) => {
+      if (node.type !== 'workspace' || !node.workspaceConfig) return node;
+      return {
+        ...node,
+        workspaceConfig: {
+          ...node.workspaceConfig,
+          environments: [...node.workspaceConfig.environments, { id: freshId, name: 'Novo Ambiente', variables: [] }]
+        }
+      };
+    });
     setEditingEnvId(freshId);
   };
 
@@ -1640,7 +1935,7 @@ getman.log("Token renovado e salvo na pasta!");`;
     return nodes.map((node) => (
       <Fragment key={node.id}>
         <div
-          className={`tree-item ${activeNodeId === node.id ? 'active-node' : ''} ${dragOverInfo?.id === node.id ? `drag-over-${dragOverInfo.position}` : ''}`}
+          className={`tree-item ${node.type === 'workspace' ? 'workspace-node' : ''} ${activeNodeId === node.id ? 'active-node' : ''} ${dragOverInfo?.id === node.id ? `drag-over-${dragOverInfo.position}` : ''}`}
           draggable={true}
           onDragStart={(e) => {
             e.dataTransfer.effectAllowed = 'move';
@@ -1666,7 +1961,7 @@ getman.log("Token renovado e salvo na pasta!");`;
               const y = e.clientY - rect.top;
               let position: 'top' | 'bottom' | 'inside' = 'bottom';
               if (y < rect.height / 3) position = 'top';
-              else if (node.type === 'folder' && y > rect.height / 3 && y < (rect.height * 2) / 3) position = 'inside';
+              else if ((node.type === 'folder' || node.type === 'workspace') && y > rect.height / 3 && y < (rect.height * 2) / 3) position = 'inside';
               else position = 'bottom';
               if (dragOverInfo?.id !== node.id || dragOverInfo?.position !== position) {
                 setDragOverInfo({ id: node.id, position });
@@ -1696,7 +1991,7 @@ getman.log("Token renovado e salvo na pasta!");`;
         >
           {/* ── Conteúdo ── */}
           <div className="tree-item-content">
-            {node.type === 'folder' && (
+            {(node.type === 'folder' || node.type === 'workspace') && (
               <span
                 className="expander-icon"
                 draggable={false}
@@ -1707,13 +2002,26 @@ getman.log("Token renovado e salvo na pasta!");`;
               </span>
             )}
 
-            {node.type === 'folder' ? (
+            {node.type === 'workspace' ? (
+              <Database size={14} className="text-accent" style={{ opacity: 0.9, flexShrink: 0 }} />
+            ) : node.type === 'folder' ? (
               <Folder size={14} className="text-accent" style={{ opacity: 0.8, flexShrink: 0 }} />
             ) : (
               <span className={`method-tag method-${node.request!.method}`}>
                 {node.request!.method}
               </span>
             )}
+
+            {/* Workspace env badge */}
+            {node.type === 'workspace' && node.workspaceConfig && (() => {
+              const activeEnv = node.workspaceConfig.environments.find(e => e.id === node.workspaceConfig!.activeEnvironmentId);
+              return (
+                <span className={`workspace-env-badge ${activeEnv ? '' : 'no-env'}`}>
+                  <span className="env-dot" />
+                  {activeEnv ? activeEnv.name : 'Sem Amb.'}
+                </span>
+              );
+            })()}
 
             {editingNodeId === node.id ? (
               <input
@@ -1756,10 +2064,15 @@ getman.log("Token renovado e salvo na pasta!");`;
           {/* ── Dropdown Menu ── */}
           {openMenuNodeId === node.id && (
             <div className="tree-dropdown-menu" onClick={(e) => e.stopPropagation()}>
-              {node.type === 'folder' && (
-                <button onClick={() => { addRequestToFolder(node.id); setOpenMenuNodeId(null); }}>
-                  <FilePlus size={13} /> Nova Requisição
-                </button>
+              {(node.type === 'folder' || node.type === 'workspace') && (
+                <>
+                  <button onClick={() => { addRequestToFolder(node.id); setOpenMenuNodeId(null); }}>
+                    <FilePlus size={13} /> Nova Requisição
+                  </button>
+                  <button onClick={() => { addFolderTo(node.id); setOpenMenuNodeId(null); }}>
+                    <Folder size={13} /> Nova Pasta
+                  </button>
+                </>
               )}
               {node.type === 'request' && (
                 <button onClick={() => { cloneRequest(node.id); setOpenMenuNodeId(null); }}>
@@ -1775,7 +2088,7 @@ getman.log("Token renovado e salvo na pasta!");`;
             </div>
           )}
         </div>
-        {node.type === 'folder' && node.expanded && node.children && (
+        {(node.type === 'folder' || node.type === 'workspace') && node.expanded && node.children && (
           <div className="tree-children-container" key={`${node.id}-children`}>
             {renderTree(node.children, depth + 1)}
           </div>
@@ -1816,7 +2129,7 @@ getman.log("Token renovado e salvo na pasta!");`;
                 </div>
               </div>
               <p style={{ color: 'var(--text-secondary)', fontSize: '13px', margin: 0 }}>
-                Snippet gerado com variáveis resolvidas para o ambiente <b>{activeEnvironmentId ? environments.find(e => e.id === activeEnvironmentId)?.name : 'Global'}</b>.
+                Snippet gerado com variáveis resolvidas para o ambiente <b>{activeNodeId ? (getActiveEnvironment(activeNodeId)?.name || 'Global') : 'Global'}</b>.
               </p>
             </div>
             <div style={{ padding: '20px', background: 'rgba(0,0,0,0.3)', maxHeight: '400px', overflow: 'auto' }}>
@@ -1880,19 +2193,23 @@ getman.log("Token renovado e salvo na pasta!");`;
                   Ambientes <button className="btn-icon" onClick={addEnv} style={{ padding: '2px' }}><Plus size={14} /></button>
                 </div>
 
-                {environments.map(env => (
-                  <div
-                    key={env.id}
-                    className={`tree-item ${editingEnvId === env.id ? 'active-node' : ''}`}
-                    onClick={() => setEditingEnvId(env.id)}
-                    style={{ margin: '0 8px', borderRadius: '4px' }}
-                  >
-                    <div style={{ display: 'flex', flex: 1, alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
-                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: activeEnvironmentId === env.id ? 'var(--success)' : 'var(--text-muted)' }} />
-                      <span style={{ fontSize: '14px', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{env.name}</span>
+                {(() => {
+                  const wsEnvs = activeNodeId ? getWorkspaceEnvironments(activeNodeId) : [];
+                  const wsEnvIdActive = activeNodeId ? getWorkspaceActiveEnvId(activeNodeId) : null;
+                  return wsEnvs.map(env => (
+                    <div
+                      key={env.id}
+                      className={`tree-item ${editingEnvId === env.id ? 'active-node' : ''}`}
+                      onClick={() => setEditingEnvId(env.id)}
+                      style={{ margin: '0 8px', borderRadius: '4px' }}
+                    >
+                      <div style={{ display: 'flex', flex: 1, alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+                        <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: wsEnvIdActive === env.id ? 'var(--success)' : 'var(--text-muted)' }} />
+                        <span style={{ fontSize: '14px', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{env.name}</span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ));
+                })()}
               </div>
 
               {/* Right Env Editor */}
@@ -1906,32 +2223,43 @@ getman.log("Token renovado e salvo na pasta!");`;
                   </div>
                 ) : (
                   <div className="fade-in">
-                    {environments.map(env => {
-                      if (env.id !== editingEnvId) return null;
-                      return (
-                        <div key={env.id}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', gap: '16px' }}>
-                            <input
-                              className="text-input"
-                              value={env.name}
-                              onChange={e => {
-                                setEnvironments(envs => envs.map(ev => ev.id === env.id ? { ...ev, name: e.target.value } : ev));
-                              }}
-                              style={{ fontSize: '18px', fontWeight: 600, background: 'rgba(0,0,0,0.5)', border: 'none', borderBottom: '2px solid var(--accent-primary)', borderRadius: '0' }}
-                            />
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                              <button className="btn-icon danger" onClick={() => removeEnv(env.id)} title="Excluir este ambiente"><Trash2 size={16} /></button>
+                    {(() => {
+                      const wsEnvs = activeNodeId ? getWorkspaceEnvironments(activeNodeId) : [];
+                      const ws = activeNodeId ? findParentWorkspace(activeNodeId) : null;
+                      return wsEnvs.map(env => {
+                        if (env.id !== editingEnvId) return null;
+                        return (
+                          <div key={env.id}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', gap: '16px' }}>
+                              <input
+                                className="text-input"
+                                value={env.name}
+                                onChange={e => {
+                                  if (!ws) return;
+                                  updateNodeInCollection(ws.id, (node) => {
+                                    if (node.type !== 'workspace' || !node.workspaceConfig) return node;
+                                    return { ...node, workspaceConfig: { ...node.workspaceConfig, environments: node.workspaceConfig.environments.map(ev => ev.id === env.id ? { ...ev, name: e.target.value } : ev) } };
+                                  });
+                                }}
+                                style={{ fontSize: '18px', fontWeight: 600, background: 'rgba(0,0,0,0.5)', border: 'none', borderBottom: '2px solid var(--accent-primary)', borderRadius: '0' }}
+                              />
+                              <div style={{ display: 'flex', gap: '8px' }}>
+                                <button className="btn-icon danger" onClick={() => removeEnv(env.id)} title="Excluir este ambiente"><Trash2 size={16} /></button>
+                              </div>
+                            </div>
+                            <div style={{ marginBottom: '24px' }}>
+                              {renderVarTable(env.variables, (newVars) => {
+                                if (!ws) return;
+                                updateNodeInCollection(ws.id, (node) => {
+                                  if (node.type !== 'workspace' || !node.workspaceConfig) return node;
+                                  return { ...node, workspaceConfig: { ...node.workspaceConfig, environments: node.workspaceConfig.environments.map(ev => ev.id === env.id ? { ...ev, variables: newVars } : ev) } };
+                                });
+                              }, 'Chaves Locais Deste Ambiente')}
                             </div>
                           </div>
-
-                          <div style={{ marginBottom: '24px' }}>
-                            {renderVarTable(env.variables, (newVars) => {
-                              setEnvironments(envs => envs.map(ev => ev.id === env.id ? { ...ev, variables: newVars } : ev));
-                            }, 'Chaves Locais Deste Ambiente')}
-                          </div>
-                        </div>
-                      )
-                    })}
+                        )
+                      });
+                    })()}
                   </div>
                 )}
               </div>
@@ -1946,29 +2274,24 @@ getman.log("Token renovado e salvo na pasta!");`;
 
       {/* Sidebar */}
       <aside className="sidebar" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-        {/* 1. Header & Workspace (Fixed Top) */}
+        {/* 1. Header (Fixed Top) */}
         <div style={{ padding: '20px 16px 14px 16px', borderBottom: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.1)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
             <h2 className="app-title" onClick={() => setActiveNodeId(null)} style={{ cursor: 'pointer', margin: 0 }}>
               <span className="highlight">GET</span> MAN
             </h2>
-            <button className="btn-icon" onClick={addWorkspace} title="Novo Workspace" style={{ padding: '4px' }}>
-              <Plus size={16} />
-            </button>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginLeft: '2px' }}>Workspace</label>
-            <select
-              value={activeWorkspaceId}
-              onChange={e => handleWorkspaceChange(e.target.value)}
-              className="select-input"
+            <label style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginLeft: '2px' }}>Pesquisar</label>
+            <input
+              type="text"
+              value={treeSearchQuery}
+              onChange={e => setTreeSearchQuery(e.target.value)}
+              placeholder="Buscar requisição, pasta..."
+              className="text-input"
               style={{ width: '100%', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-strong)', padding: '6px 10px', fontSize: '13px', borderRadius: '6px' }}
-            >
-              {workspaces.map(ws => (
-                <option key={ws.id} value={ws.id}>{ws.name}</option>
-              ))}
-            </select>
+            />
           </div>
         </div>
 
@@ -1994,8 +2317,7 @@ getman.log("Token renovado e salvo na pasta!");`;
             <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.02)' }}>
               <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Coleção</span>
               <div className="sidebar-actions" style={{ gap: '2px' }}>
-                <button className="btn-icon" onClick={addFolder} title="Nova Pasta" style={{ padding: '5px' }}><Folder size={14} /></button>
-                <button className="btn-icon" onClick={addRequestToRoot} title="Nova Req" style={{ padding: '5px' }}><Plus size={14} /></button>
+                <button className="btn-icon" onClick={addWorkspace} title="Novo Workspace" style={{ padding: '5px' }}><Database size={14} /></button>
                 <button className="btn-icon" onClick={exportCollection} title="Exportar" style={{ padding: '5px' }}><Download size={14} /></button>
                 <label className="btn-icon" style={{ cursor: 'pointer', margin: 0, padding: '5px' }} title="Importar">
                   <Upload size={14} />
@@ -2026,7 +2348,27 @@ getman.log("Token renovado e salvo na pasta!");`;
                 }
               }}
             >
-              {renderTree(collection)}
+              {(() => {
+                if (!treeSearchQuery.trim()) return renderTree(collection);
+
+                const query = treeSearchQuery.toLowerCase();
+                const filterNodes = (nodes: CollectionNode[]): CollectionNode[] => {
+                  return nodes.reduce((acc: CollectionNode[], node) => {
+                    const matches = node.name.toLowerCase().includes(query);
+                    const children = node.children ? filterNodes(node.children) : [];
+
+                    if (matches || children.length > 0) {
+                      acc.push({ ...node, children, expanded: children.length > 0 ? true : node.expanded });
+                    }
+                    return acc;
+                  }, []);
+                };
+
+                const filtered = filterNodes(collection);
+                return filtered.length > 0
+                  ? renderTree(filtered)
+                  : <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Nenhum resultado encontrado.</div>;
+              })()}
               <div style={{ height: '80px', pointerEvents: 'none' }} />
             </div>
           </>
@@ -2034,86 +2376,42 @@ getman.log("Token renovado e salvo na pasta!");`;
           <div className="sidebar-history-container" style={{ flex: 1, padding: '16px 14px', overflowY: 'auto', background: 'rgba(0,0,0,0.05)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Recentes</span>
-              <button className="btn-icon danger" onClick={() => setHistory([])} title="Limpar Histórico" style={{ opacity: history.length > 0 ? 1 : 0.3 }}><Trash2 size={14} /></button>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                {activeNodeId ? (findParentWorkspace(activeNodeId)?.name || '') : ''}
+              </span>
             </div>
-            {history.length === 0 && (
-              <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
-                <Clock size={32} style={{ opacity: 0.1, marginBottom: '12px' }} />
-                <p>Nenhuma requisição feita recentemente.</p>
-              </div>
-            )}
-            {history.map(entry => (
-              <div
-                key={entry.id}
-                className="history-card"
-                onClick={() => setActiveNodeId(entry.requestId)}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span className={`method-${entry.method}`} style={{ fontSize: '10px', fontWeight: 900 }}>{entry.method}</span>
-                  <span style={{ fontSize: '11px', fontWeight: 800, color: entry.status >= 200 && entry.status < 300 ? 'var(--success)' : 'var(--text-error)' }}>
-                    {entry.status}
-                  </span>
+            {(() => {
+              const wsHistory = activeNodeId ? getWorkspaceHistory(activeNodeId) : [];
+              if (wsHistory.length === 0) return (
+                <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+                  <Clock size={32} style={{ opacity: 0.1, marginBottom: '12px' }} />
+                  <p>Nenhuma requisição feita recentemente.</p>
                 </div>
-                <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', margin: '4px 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {entry.requestName}
+              );
+              return wsHistory.map(entry => (
+                <div
+                  key={entry.id}
+                  className="history-card"
+                  onClick={() => setActiveNodeId(entry.requestId)}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span className={`method-${entry.method}`} style={{ fontSize: '10px', fontWeight: 900 }}>{entry.method}</span>
+                    <span style={{ fontSize: '11px', fontWeight: 800, color: entry.status >= 200 && entry.status < 300 ? 'var(--success)' : 'var(--text-error)' }}>
+                      {entry.status}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', margin: '4px 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {entry.requestName}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10px', color: 'var(--text-muted)' }}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px' }}>{entry.url}</span>
+                    <span>{new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10px', color: 'var(--text-muted)' }}>
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px' }}>{entry.url}</span>
-                  <span>{new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                </div>
-              </div>
-            ))}
+              ));
+            })()}
           </div>
         )}
-
-        {/* 4. Environment Selector (Fixed Bottom) */}
-        <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.15)', position: 'relative' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginLeft: '2px' }}>Ambiente Ativo</label>
-            <div className="env-select-container" style={{ margin: 0, width: '100%', border: '1px solid var(--border-strong)' }}>
-              <div
-                className="env-select"
-                onClick={() => setIsEnvDropdownOpen(!isEnvDropdownOpen)}
-                style={{ flex: 1, color: activeEnvironmentId ? 'var(--text-primary)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', fontSize: '13px', padding: '0 10px' }}
-              >
-                {activeEnvironmentId ? environments.find(e => e.id === activeEnvironmentId)?.name : 'Nenhum'}
-              </div>
-
-              <button className="btn-icon" onClick={() => { setEditingEnvId(activeEnvironmentId || 'GLOBAL'); setIsEnvModalOpen(true); }} title="Gerenciar Ambientes" style={{ padding: '6px' }}>
-                <Layers size={14} className="text-accent" />
-              </button>
-            </div>
-          </div>
-
-          {isEnvDropdownOpen && (
-            <>
-              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 90 }} onClick={() => setIsEnvDropdownOpen(false)} />
-              <div className="glass-panel fade-in" style={{ position: 'absolute', bottom: '100%', left: '16px', right: '16px', marginBottom: '8px', zIndex: 100, padding: '8px 0', border: '1px solid var(--border-strong)', boxShadow: '0 -10px 60px rgba(0,0,0,0.8)', background: 'var(--bg-panel-solid)' }}>
-                <div
-                  className="dropdown-item"
-                  style={{ padding: '10px 16px', cursor: 'pointer', color: !activeEnvironmentId ? 'var(--accent-primary)' : 'var(--text-secondary)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '10px' }}
-                  onClick={() => { setActiveEnvironmentId(null); setIsEnvDropdownOpen(false); }}
-                >
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: !activeEnvironmentId ? 'var(--accent-primary)' : 'transparent', border: !activeEnvironmentId ? 'none' : '1px solid var(--text-muted)' }} />
-                  Nenhum (Usar Globais)
-                </div>
-                <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }} />
-                <div style={{ padding: '8px 16px', fontSize: '10px', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>Seus Ambientes</div>
-                {environments.map(e => (
-                  <div
-                    key={e.id}
-                    className="dropdown-item"
-                    style={{ padding: '10px 16px', cursor: 'pointer', color: activeEnvironmentId === e.id ? 'var(--text-primary)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', transition: 'all 0.2s' }}
-                    onClick={() => { setActiveEnvironmentId(e.id); setIsEnvDropdownOpen(false); }}
-                  >
-                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: activeEnvironmentId === e.id ? 'var(--success)' : 'var(--text-muted)', boxShadow: activeEnvironmentId === e.id ? '0 0 8px var(--success)' : 'none' }} />
-                    <span style={{ fontWeight: activeEnvironmentId === e.id ? 600 : 400 }}>{e.name}</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
       </aside>
 
       {/* Main Content */}
@@ -2125,21 +2423,240 @@ getman.log("Token renovado e salvo na pasta!");`;
               <Terminal size={64} style={{ opacity: 0.1 }} />
               <Layers size={32} className="text-accent" style={{ position: 'absolute', bottom: -10, right: -10, opacity: 0.5 }} />
             </div>
-            <h2 style={{ color: 'var(--text-primary)', marginBottom: '8px', letterSpacing: '-0.5px' }}>{activeWorkspace.name}</h2>
+            <h2 style={{ color: 'var(--text-primary)', marginBottom: '8px', letterSpacing: '-0.5px' }}>GET MAN</h2>
             <p style={{ maxWidth: '400px', textAlign: 'center', lineHeight: 1.6, marginBottom: '32px' }}>
-              Explore as coleções deste workspace no menu lateral ou gerencie os ambientes de <b>{activeWorkspace.name}</b>.
+              Selecione uma requisição no menu lateral ou crie uma nova para começar.
             </p>
             <div style={{ display: 'flex', gap: '16px' }}>
-              <button className="btn btn-primary" onClick={addRequestToRoot}><Plus size={16} /> Nova Requisição</button>
-              <button className="btn btn-secondary" onClick={() => { setEditingEnvId(environments[0]?.id || 'GLOBAL'); setIsEnvModalOpen(true); }}>
-                <Layers size={16} /> Gerenciar Ambientes
-              </button>
+              <button className="btn btn-primary" onClick={addWorkspace}><Database size={16} /> Novo Workspace</button>
             </div>
-
             <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px dashed var(--border-strong)', width: '100%', maxWidth: '400px', display: 'flex', justifyContent: 'center' }}>
               <button className="btn btn-primary" onClick={generateCrudExample} style={{ background: 'var(--accent-gradient)', border: 'none', boxShadow: '0 4px 15px rgba(99, 102, 241, 0.4)' }}>
                 <Database size={16} /> Gerar Template CRUD + Login Automático
               </button>
+            </div>
+          </div>
+        ) : activeNode.type === 'workspace' ? (
+          /* WORKSPACE CONFIGURATION */
+          <div className="fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {/* Workspace Header */}
+            <div style={{ padding: '20px 32px 16px', borderBottom: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.08)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <h1 style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: 0, letterSpacing: '-0.5px', fontSize: '22px' }}>
+                  <Database size={22} className="text-accent" /> {activeNode.name}
+                </h1>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button className="btn btn-secondary" onClick={() => addRequestToFolder(activeNode.id)} style={{ padding: '8px 14px', fontSize: '12px' }}>
+                    <Plus size={14} /> Requisição
+                  </button>
+                  <button className="btn btn-secondary" onClick={() => addFolderTo(activeNode.id)} style={{ padding: '8px 14px', fontSize: '12px' }}>
+                    <Folder size={14} /> Pasta
+                  </button>
+                </div>
+              </div>
+              <p style={{ color: 'var(--text-muted)', margin: 0, fontSize: '13px' }}>
+                Gerencie ambientes, variáveis e configurações deste workspace.
+              </p>
+            </div>
+
+            {/* Workspace Tabs */}
+            <div className="ws-config-tabs">
+              <button
+                className={`ws-config-tab ${activeWorkspaceTab === 'environments' ? 'active' : ''}`}
+                onClick={() => setActiveWorkspaceTab('environments')}
+              >
+                <Layers size={14} /> Ambientes
+                <span className="tab-count">{activeNode.workspaceConfig?.environments.length || 0}</span>
+              </button>
+              <button
+                className={`ws-config-tab ${activeWorkspaceTab === 'globals' ? 'active' : ''}`}
+                onClick={() => setActiveWorkspaceTab('globals')}
+              >
+                <Globe size={14} /> Variáveis Globais
+                <span className="tab-count">{globalVariables.length}</span>
+              </button>
+              <button
+                className={`ws-config-tab ${activeWorkspaceTab === 'summary' ? 'active' : ''}`}
+                onClick={() => setActiveWorkspaceTab('summary')}
+              >
+                <Database size={14} /> Resumo
+              </button>
+            </div>
+
+            {/* Tab Content */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+              {/* ─── TAB: AMBIENTES ─── */}
+              {activeWorkspaceTab === 'environments' && (
+                <div className="ws-env-layout fade-in">
+                  {/* Left: env list */}
+                  <div className="ws-env-sidebar">
+                    <div className="ws-env-sidebar-header">
+                      <span>Ambientes</span>
+                      <button className="btn-icon" onClick={addEnv} style={{ padding: '2px' }} title="Novo Ambiente"><Plus size={14} /></button>
+                    </div>
+
+                    {(activeNode.workspaceConfig?.environments || []).map(env => {
+                      const isActive = env.id === activeNode.workspaceConfig?.activeEnvironmentId;
+                      return (
+                        <div
+                          key={env.id}
+                          className={`ws-env-item ${editingEnvId === env.id ? 'active' : ''}`}
+                          onClick={() => setEditingEnvId(env.id)}
+                        >
+                          <div
+                            className="env-active-dot"
+                            style={{
+                              background: isActive ? 'var(--success)' : 'var(--text-muted)',
+                              boxShadow: isActive ? '0 0 6px var(--success)' : 'none',
+                              cursor: 'pointer'
+                            }}
+                            title={isActive ? 'Ambiente ativo (clique p/ desativar)' : 'Clique p/ ativar'}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setWorkspaceActiveEnvId(activeNode.id, isActive ? null : env.id);
+                            }}
+                          />
+                          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{env.name}</span>
+                          {isActive && <Check size={12} style={{ color: 'var(--success)', flexShrink: 0 }} />}
+                        </div>
+                      );
+                    })}
+
+                    {(activeNode.workspaceConfig?.environments || []).length === 0 && (
+                      <div style={{ padding: '20px 14px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+                        Nenhum ambiente.
+                        <br />
+                        Clique em <strong>+</strong> acima.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right: env editor */}
+                  <div className="ws-env-editor">
+                    {!editingEnvId || !activeNode.workspaceConfig?.environments.find(e => e.id === editingEnvId) ? (
+                      <div style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: '60px', fontSize: '13px' }}>
+                        <Layers size={32} style={{ opacity: 0.1, marginBottom: '12px' }} />
+                        <p>Selecione um ambiente na lista ao lado para editar suas variáveis.</p>
+                      </div>
+                    ) : (() => {
+                      const env = activeNode.workspaceConfig!.environments.find(e => e.id === editingEnvId)!;
+                      const isActive = env.id === activeNode.workspaceConfig!.activeEnvironmentId;
+                      return (
+                        <div className="fade-in">
+                          <div className="ws-env-editor-header">
+                            <input
+                              className="text-input"
+                              value={env.name}
+                              onChange={e => {
+                                updateNodeInCollection(activeNode.id, (node) => {
+                                  if (node.type !== 'workspace' || !node.workspaceConfig) return node;
+                                  return { ...node, workspaceConfig: { ...node.workspaceConfig, environments: node.workspaceConfig.environments.map(ev => ev.id === env.id ? { ...ev, name: e.target.value } : ev) } };
+                                });
+                              }}
+                            />
+                            <button
+                              className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'}`}
+                              onClick={() => setWorkspaceActiveEnvId(activeNode.id, isActive ? null : env.id)}
+                              style={{ padding: '8px 14px', fontSize: '12px', whiteSpace: 'nowrap' }}
+                            >
+                              {isActive ? <><Check size={13} /> Ativo</> : 'Ativar'}
+                            </button>
+                            <button className="btn-icon danger" onClick={() => removeEnv(env.id)} title="Excluir este ambiente">
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+
+                          {renderVarTable(env.variables, (newVars) => {
+                            updateNodeInCollection(activeNode.id, (node) => {
+                              if (node.type !== 'workspace' || !node.workspaceConfig) return node;
+                              return { ...node, workspaceConfig: { ...node.workspaceConfig, environments: node.workspaceConfig.environments.map(ev => ev.id === env.id ? { ...ev, variables: newVars } : ev) } };
+                            });
+                          }, 'Variáveis do Ambiente')}
+
+                          <p style={{ marginTop: '12px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                            Use <code style={{ color: 'var(--accent-primary)' }}>{'{{chave}}'}</code> nas URLs, headers e body para referenciar variáveis.<br />
+                            Variáveis do ambiente sobrescrevem as globais.
+                          </p>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+
+              {/* ─── TAB: VARIÁVEIS GLOBAIS ─── */}
+              {activeWorkspaceTab === 'globals' && (
+                <div className="fade-in" style={{ padding: '24px 32px', flex: 1, overflowY: 'auto' }}>
+                  <div style={{ maxWidth: '800px' }}>
+                    <div style={{ marginBottom: '20px' }}>
+                      <h3 style={{ fontSize: '16px', color: 'var(--text-primary)', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Globe size={16} className="text-accent" /> Variáveis Globais <span className="badge">G</span>
+                      </h3>
+                      <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>
+                        Variáveis globais são acessíveis em todos os workspaces e ambientes. Ambientes específicos podem sobrescrever estas chaves.
+                      </p>
+                    </div>
+                    {renderVarTable(globalVariables, setGlobalVariables, '')}
+                  </div>
+                </div>
+              )}
+
+              {/* ─── TAB: RESUMO ─── */}
+              {activeWorkspaceTab === 'summary' && (
+                <div className="fade-in" style={{ padding: '24px 32px', flex: 1, overflowY: 'auto' }}>
+                  <div className="glass-panel" style={{ padding: '20px', marginBottom: '20px' }}>
+                    <h3 style={{ marginBottom: '16px', fontSize: '16px', color: 'var(--text-primary)' }}>📊 Resumo do Workspace</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                      <div style={{ padding: '20px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--accent-primary)' }}>{activeNode.children?.length || 0}</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>Itens na Raiz</div>
+                      </div>
+                      <div style={{ padding: '20px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--success)' }}>{activeNode.workspaceConfig?.environments.length || 0}</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>Ambientes</div>
+                      </div>
+                      <div style={{ padding: '20px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', textAlign: 'center' }}>
+                        <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--text-primary)' }}>{activeNode.workspaceConfig?.history?.length || 0}</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>No Histórico</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Active Env Info */}
+                  <div className="glass-panel" style={{ padding: '20px' }}>
+                    <h3 style={{ marginBottom: '12px', fontSize: '16px', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Layers size={16} /> Ambiente Ativo
+                    </h3>
+                    {(() => {
+                      const wsActiveEnv = activeNode.workspaceConfig?.environments.find(e => e.id === activeNode.workspaceConfig?.activeEnvironmentId);
+                      if (!wsActiveEnv) return (
+                        <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Nenhum ambiente ativo. Vá para a aba "Ambientes" e ative um.</p>
+                      );
+                      return (
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                            <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--success)', boxShadow: '0 0 8px var(--success)' }} />
+                            <span style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>{wsActiveEnv.name}</span>
+                            <span className="badge" style={{ fontSize: '10px' }}>{wsActiveEnv.variables.length} vars</span>
+                          </div>
+                          <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: '6px', padding: '12px', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+                            {wsActiveEnv.variables.length === 0 ? (
+                              <span style={{ color: 'var(--text-muted)' }}>Nenhuma variável definida neste ambiente.</span>
+                            ) : wsActiveEnv.variables.map(v => (
+                              <div key={v.id} style={{ display: 'flex', gap: '8px', marginBottom: '4px' }}>
+                                <span style={{ color: 'var(--accent-primary)' }}>{v.key}</span>
+                                <span style={{ color: 'var(--text-muted)' }}>=</span>
+                                <span style={{ color: 'var(--success)' }}>{v.value}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         ) : activeNode.type === 'folder' ? (
@@ -2328,12 +2845,29 @@ getman.log("Token renovado e salvo na pasta!");`;
             <div className="editor-layout">
               <div className="request-panel" style={{ width: leftPanelWidth, flex: 'none' }}>
                 <div className="tabs">
+                  <div className={`tab ${activeReqTab === 'params' ? 'active' : ''}`} onClick={() => setActiveReqTab('params')}>Params (URL)</div>
+                  <div className={`tab ${activeReqTab === 'queries' ? 'active' : ''}`} onClick={() => setActiveReqTab('queries')}>Queries <span className="badge">{(activeReq!.queryParams || []).filter(q => q.key).length || ''}</span></div>
                   <div className={`tab ${activeReqTab === 'auth' ? 'active' : ''}`} onClick={() => setActiveReqTab('auth')}>Autenticação</div>
-                  <div className={`tab ${activeReqTab === 'headers' ? 'active' : ''}`} onClick={() => setActiveReqTab('headers')}>Headers Custo. <span className="badge">{activeReq!.headers.filter(h => h.key).length || ''}</span></div>
+                  <div className={`tab ${activeReqTab === 'headers' ? 'active' : ''}`} onClick={() => setActiveReqTab('headers')}>Headers Custo. <span className="badge">{(activeReq!.headers || []).filter(h => h.key).length || ''}</span></div>
                   <div className={`tab ${activeReqTab === 'body' ? 'active' : ''}`} onClick={() => setActiveReqTab('body')}>Payload / Body</div>
                 </div>
 
                 <div style={{ padding: '16px 12px', flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+                  {activeReqTab === 'params' && (
+                    <div className="headers-container" style={{ marginTop: 0 }}>
+                      <h3 style={{ marginBottom: '16px', color: 'var(--text-primary)', fontSize: '15px' }}>Path Parameters</h3>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '16px' }}>Reemplace <code>:id</code> o <code>{'{id}'}</code> en la URL.</p>
+                      {renderVarTable(activeReq!.params || [], (v) => handleActiveReqChange({ params: v }), '', true)}
+                    </div>
+                  )}
+
+                  {activeReqTab === 'queries' && (
+                    <div className="headers-container" style={{ marginTop: 0 }}>
+                      <h3 style={{ marginBottom: '16px', color: 'var(--text-primary)', fontSize: '15px' }}>Query Parameters</h3>
+                      {renderVarTable(activeReq!.queryParams || [], (v) => handleActiveReqChange({ queryParams: v }), '', true)}
+                    </div>
+                  )}
+
                   {activeReqTab === 'auth' && (
                     <div className="glass-panel" style={{ padding: '24px 32px' }}>
                       <div style={{ marginBottom: '16px' }}>

@@ -84,14 +84,23 @@ describe('GET MAN - Premium Features E2E', () => {
     // 5. VARIÁVEIS GLOBAIS
     // ────────────────────────────────────────────
     it('Deve injetar variáveis Globais no fluxo', () => {
-        cy.get('button[title="Gerenciar Ambientes"]').click();
-        cy.get('.modal-content').should('be.visible');
+        // Navigate to workspace to set global vars via the new inline UI
+        cy.get('.sidebar-tree-container').contains('.workspace-node', 'Workspace', { timeout: 10000 })
+            .find('.node-name').click({ force: true });
 
+        // Go to "Variáveis Globais" tab
+        cy.get('.ws-config-tab').contains('Variáveis Globais').click({ force: true });
+        cy.contains('Variáveis globais são acessíveis').should('be.visible');
+
+        // Add a global variable
         cy.contains('button', 'Adicionar Linha').click();
         cy.get('input[placeholder="Chave"]').last().type('env_host', { parseSpecialCharSequences: false });
         cy.get('input[placeholder="Valor"]').last().type(POSTMAN_ECHO, { parseSpecialCharSequences: false });
-        cy.contains('button', 'Concluir Setup').click();
 
+        // Go back to the request
+        cy.get('.sidebar-tree-container').contains('Listar Dados', { timeout: 10000 }).click({ force: true });
+
+        // Use the global variable in the URL
         cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type('{{env_host}}/get', { parseSpecialCharSequences: false });
         cy.contains('button', 'Fazer Disparo').click({ force: true });
         cy.get('.status-badge', { timeout: 25000 }).should('contain', '200');
