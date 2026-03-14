@@ -17,6 +17,7 @@
     "fs:allow-desktop-write",
     "fs:allow-document-write",
     "fs:allow-download-write",
+    "websocket:default",
     {
       "identifier": "http:default",
       "allow": [

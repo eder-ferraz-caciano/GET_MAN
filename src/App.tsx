@@ -8,8 +8,10 @@ import { v4 as uuidv4 } from 'uuid';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
+import { graphql } from 'cm6-graphql';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { fetch as tauriHttpFetch } from '@tauri-apps/plugin-http';
+import WebSocket from '@tauri-apps/plugin-websocket';
 import { save as tauriSave, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import { writeFile as tauriWriteFile, readFile as tauriReadFile } from '@tauri-apps/plugin-fs';
 
@@ -22,7 +24,7 @@ const safeFetch = async (url: string, init?: RequestInit) => {
 import './index.css';
 
 // Types
-type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'WS';
 type AuthType = 'none' | 'bearer' | 'basic' | 'apikey' | 'inherit' | 'oauth2';
 
 interface RequestHeader {
@@ -62,7 +64,7 @@ interface AuthConfig {
   };
 }
 
-type RequestBodyType = 'json' | 'form-data' | 'urlencoded' | 'binary' | 'none';
+type RequestBodyType = 'json' | 'form-data' | 'urlencoded' | 'binary' | 'none' | 'graphql' | 'ws';
 
 interface FormDataField {
   id: string;
@@ -85,13 +87,16 @@ interface RequestModel {
   body: string;
   bodyType: RequestBodyType;
   formData: FormDataField[];
+  graphqlQuery?: string;
+  graphqlVariables?: string;
+  wsMessages?: { id: string; type: 'sent' | 'received' | 'info' | 'error'; text: string; timestamp: number }[];
   binaryFile?: { name: string; path: string } | null;
   savedResponse?: {
     status: number;
     statusText: string;
     data: any;
     time: number;
-    type?: 'json' | 'image' | 'pdf' | 'html' | 'text' | 'binary';
+    type?: 'json' | 'image' | 'pdf' | 'html' | 'text' | 'binary' | 'ws';
     contentType?: string;
     headers?: Record<string, string>;
   } | null;
@@ -319,11 +324,11 @@ const syncUrlToQueryParams = (url: string, currentQueries: RequestHeader[]) => {
 };
 
 const syncUrlToPathParams = (url: string, currentParams: RequestHeader[]) => {
-  const matches = url.match(/:([a-zA-Z0-9_-]+)/g) || [];
-  const matches2 = url.match(/\{([a-zA-Z0-9_-]+)\}/g) || [];
+  const matches = Array.from(url.matchAll(/(?:^|\/):([a-zA-Z0-9_-]+)(?=\/|$|\?|#)/g)).map(m => m[1]);
+  const matches2 = Array.from(url.matchAll(/(?<!\{)\{([a-zA-Z0-9_-]+)\}(?!\})/g)).map(m => m[1]);
   const keys = [...new Set([
-    ...matches.map(m => m.substring(1)),
-    ...matches2.map(m => m.substring(1, m.length - 1))
+    ...matches,
+    ...matches2
   ])];
 
   const newParams: RequestHeader[] = [];
@@ -337,6 +342,16 @@ const syncUrlToPathParams = (url: string, currentParams: RequestHeader[]) => {
     });
   });
   return newParams;
+};
+
+const AutoScrollEnd = ({ dependency }: { dependency: any }) => {
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (endRef.current) {
+      endRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [dependency]);
+  return <div ref={endRef} />;
 };
 
 export default function App() {
@@ -451,6 +466,19 @@ export default function App() {
   const [openMenuNodeId, setOpenMenuNodeId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [nodeToDelete, setNodeToDelete] = useState<{ id: string, name: string } | null>(null);
+
+  // Timeouts & Abort Controllers
+  const [reqTimeoutMs, setReqTimeoutMs] = useState<number>(30000);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const [showLoadingOverlay, setShowLoadingOverlay] = useState(false);
+  const loadingOverlayTimer = useRef<number | null>(null);
+
+  const cancelReq = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      addLog('warn', '🚨 Requisição cancelada pelo usuário.');
+    }
+  };
 
   // Fechar dropdown ao clicar fora
   useEffect(() => {
@@ -797,68 +825,131 @@ const data = await res.json();
 getman.setEnv("token_acesso", data.token);
 getman.log("Token renovado e salvo na pasta!");`;
 
+    const envDevId = uuidv4();
+    const envProdId = uuidv4();
+
+    const workspaceId = uuidv4();
     const folderId = uuidv4();
-    const newFolder: CollectionNode = {
-      id: folderId,
-      name: 'API (Exemplo CRUD e Login)',
-      type: 'folder',
+
+    const newWorkspace: CollectionNode = {
+      id: workspaceId,
+      name: 'Workspace de Exemplo (CRUD)',
+      type: 'workspace',
       expanded: true,
+      workspaceConfig: {
+        activeEnvironmentId: envDevId,
+        history: [],
+        environments: [
+          {
+            id: envDevId,
+            name: 'DEV (LocalHost)',
+            variables: [
+              { id: uuidv4(), key: 'base_url', value: 'http://127.0.0.1:3333' },
+              { id: uuidv4(), key: 'token_acesso', value: '' }
+            ]
+          },
+          {
+            id: envProdId,
+            name: 'PROD (Nuvem)',
+            variables: [
+              { id: uuidv4(), key: 'base_url', value: 'https://api.empresa.com.br' },
+              { id: uuidv4(), key: 'token_acesso', value: '' }
+            ]
+          }
+        ]
+      },
       children: [
         {
-          id: uuidv4(),
-          name: '1. Listar Usuários (GET)',
-          type: 'request',
-          request: {
-            ...defaultRequest,
-            id: uuidv4(),
-            name: '1. Listar Usuários (GET)',
-            method: 'GET',
-            url: '{{base_url}}/users'
-          }
-        },
-        {
-          id: uuidv4(),
-          name: '2. Criar Usuário (POST)',
-          type: 'request',
-          request: {
-            ...defaultRequest,
-            id: uuidv4(),
-            name: '2. Criar Usuário (POST)',
-            method: 'POST',
-            url: '{{base_url}}/users',
-            body: '{\n  "name": "João Silva",\n  "email": "joao@email.com",\n  "role": "admin"\n}'
-          }
+          id: folderId,
+          name: 'API (Módulo de Usuários)',
+          type: 'folder',
+          expanded: true,
+          folderConfig: {
+            auth: {
+              type: 'bearer',
+              token: '{{token_acesso}}',
+              username: '',
+              password: ''
+            },
+            variables: [], // Variáveis limpas na pasta para herdar do ambiente
+            setupScript: authSetupScript
+          },
+          children: [
+            {
+              id: uuidv4(),
+              name: '1. Listar (GET)',
+              type: 'request',
+              request: {
+                ...defaultRequest,
+                id: uuidv4(),
+                name: '1. Listar (GET)',
+                method: 'GET',
+                url: '{{base_url}}/users'
+              }
+            },
+            {
+              id: uuidv4(),
+              name: '2. Exibir por ID (GET)',
+              type: 'request',
+              request: {
+                ...defaultRequest,
+                id: uuidv4(),
+                name: '2. Exibir por ID (GET)',
+                method: 'GET',
+                url: '{{base_url}}/users/:id',
+                params: [{ id: uuidv4(), key: 'id', value: '1', enabled: true }]
+              }
+            },
+            {
+              id: uuidv4(),
+              name: '3. Salvar (POST)',
+              type: 'request',
+              request: {
+                ...defaultRequest,
+                id: uuidv4(),
+                name: '3. Salvar (POST)',
+                method: 'POST',
+                url: '{{base_url}}/users',
+                bodyType: 'json',
+                body: '{\n  "name": "João Silva",\n  "email": "joao@email.com",\n  "role": "admin"\n}'
+              }
+            },
+            {
+              id: uuidv4(),
+              name: '4. Editar (PUT)',
+              type: 'request',
+              request: {
+                ...defaultRequest,
+                id: uuidv4(),
+                name: '4. Editar (PUT)',
+                method: 'PUT',
+                url: '{{base_url}}/users/:id',
+                params: [{ id: uuidv4(), key: 'id', value: '1', enabled: true }],
+                bodyType: 'json',
+                body: '{\n  "role": "manager"\n}'
+              }
+            },
+            {
+              id: uuidv4(),
+              name: '5. Deletar (DELETE)',
+              type: 'request',
+              request: {
+                ...defaultRequest,
+                id: uuidv4(),
+                name: '5. Deletar (DELETE)',
+                method: 'DELETE',
+                url: '{{base_url}}/users/:id',
+                params: [{ id: uuidv4(), key: 'id', value: '1', enabled: true }]
+              }
+            }
+          ]
         }
-      ],
-      folderConfig: {
-        auth: {
-          type: 'bearer',
-          token: '{{token_acesso}}',
-          username: '',
-          password: ''
-        },
-        variables: [
-          { id: uuidv4(), key: 'base_url', value: 'http://127.0.0.1:3333' }
-        ],
-        setupScript: authSetupScript
-      }
+      ]
     };
 
-    // Add CRUD folder to first workspace
-    const firstWs = collection.find(n => n.type === 'workspace');
-    if (firstWs) {
-      const updateNode = (nodes: CollectionNode[]): CollectionNode[] => nodes.map(node => {
-        if (node.id === firstWs.id) {
-          return { ...node, expanded: true, children: [...(node.children || []), newFolder] };
-        }
-        return node;
-      });
-      setCollection(updateNode(collection));
-    } else {
-      setCollection([...collection, newFolder]);
-    }
-    setActiveNodeId(folderId);
-    addLog('success', '🚀 Template de Usuários e Login gerado com Sucesso!');
+    setCollection(prev => [...prev, newWorkspace]);
+    setActiveNodeId(workspaceId);
+    addLog('success', '📦 Nova Workspace de Exemplo criada com ambientes Prod/Dev e CRUD completo');
   };
 
   const addRequestToFolder = (folderId: string) => {
@@ -875,6 +966,30 @@ getman.log("Token renovado e salvo na pasta!");`;
     setCollection(updateNode(collection));
     setActiveNodeId(req.id);
     addLog('success', '📄 Nova rota adicionada ao agrupador.');
+  };
+
+  const addWebSocketToFolder = (folderId: string) => {
+    const wsReq = {
+      ...defaultRequest,
+      id: uuidv4(),
+      name: 'Conexão WebSocket',
+      method: 'WS' as HttpMethod,
+      url: 'wss://echo.websocket.org',
+      bodyType: 'ws' as RequestBodyType,
+      wsMessages: []
+    };
+    const newNode: CollectionNode = { id: wsReq.id, name: wsReq.name, type: 'request', request: wsReq };
+
+    const updateNode = (nodes: CollectionNode[]): CollectionNode[] => nodes.map(node => {
+      if (node.id === folderId || node.id === folderId.replace('-ws', '')) {
+        return { ...node, expanded: true, children: [...(node.children || []), newNode] };
+      }
+      if (node.children) return { ...node, children: updateNode(node.children) };
+      return node;
+    });
+    setCollection(updateNode(collection));
+    setActiveNodeId(wsReq.id);
+    addLog('info', '🌐 Nova conexão WebSocket adicionada.');
   };
 
   const cloneRequest = (nodeId: string) => {
@@ -982,6 +1097,11 @@ getman.log("Token renovado e salvo na pasta!");`;
 
     const path = getPath(collection, targetNodeId, []);
     const activeEnv = getActiveEnvironment(targetNodeId);
+
+    // Debugging only if it's a request or if there's an issue
+    if (result.includes('{{') && !path) {
+       console.warn(`[Variables] No path found for node ${targetNodeId}. Variable resolution might fail.`);
+    }
 
     while (result.includes('{{') && iterations < MAX_ITERATIONS) {
       const nextResult = result.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
@@ -1144,14 +1264,102 @@ getman.log("Token renovado e salvo na pasta!");`;
     return "";
   };
 
-  const handleSend = async () => {
+  // WS State Reference
+  const wsInstRef = useRef<WebSocket | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [wsInputMessage, setWsInputMessage] = useState('');
+
+  const connectWs = async () => {
     if (!activeReq) return;
     setLoading(true);
+    const targetUrl = applyVariables(activeReq.url, activeReq.id);
+    addLog('info', `🔌 Tentando conectar WebSocket em: ${targetUrl}`);
+
+    try {
+      const ws = await WebSocket.connect(targetUrl);
+      wsInstRef.current = ws;
+      setWsConnected(true);
+
+      handleActiveReqChange({
+        wsMessages: [...(activeReq.wsMessages || []), { id: uuidv4(), type: 'info', text: 'Conectado a ' + targetUrl, timestamp: Date.now() }]
+      });
+
+      ws.addListener((msg) => {
+        let textData = '';
+        if (msg.type === 'Text') textData = msg.data as string;
+        else if (msg.type === 'Binary') textData = '[Binary Message]';
+
+        handleActiveReqChange({
+          wsMessages: [...(activeReq.wsMessages || []), { id: uuidv4(), type: 'received', text: textData, timestamp: Date.now() }]
+        });
+      });
+
+    } catch (err: any) {
+      addLog('error', `❌ Falha ao conectar WS: ${err.message || err.toString()}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const disconnectWs = async () => {
+    if (wsInstRef.current) {
+      await wsInstRef.current.disconnect();
+      wsInstRef.current = null;
+      setWsConnected(false);
+      handleActiveReqChange({
+        wsMessages: [...(activeReq!.wsMessages || []), { id: uuidv4(), type: 'info', text: 'Desconectado', timestamp: Date.now() }]
+      });
+      addLog('info', '🔌 WebSocket Desconectado');
+    }
+  };
+
+  const sendWsMessage = async () => {
+    if (wsInstRef.current && wsConnected && wsInputMessage.trim()) {
+      await wsInstRef.current.send(wsInputMessage);
+      handleActiveReqChange({
+        wsMessages: [...(activeReq!.wsMessages || []), { id: uuidv4(), type: 'sent', text: wsInputMessage, timestamp: Date.now() }]
+      });
+      setWsInputMessage('');
+    }
+  };
+
+  const handleSend = async () => {
+    if (!activeReq) return;
+    if (activeReq.method === 'WS') {
+      if (wsConnected) await disconnectWs();
+      else await connectWs();
+      return;
+    }
+
+    setLoading(true);
     setCopiedRes(false);
+    
+    abortControllerRef.current = new AbortController();
+    setShowLoadingOverlay(false);
+    if (loadingOverlayTimer.current) clearTimeout(loadingOverlayTimer.current);
+    
+    // Configura um timer global na request para só exibir que tá carregando visualmente pesadão após 3 secs
+    loadingOverlayTimer.current = window.setTimeout(() => {
+      setShowLoadingOverlay(true);
+    }, 3000);
+
     const startTime = Date.now();
 
+    // Use activeNodeId which is more reliable for path finding in Tree
+    const nodeId = activeNodeId || activeReq.id;
+    const parentWs = findParentWorkspace(nodeId);
+    const activeEnv = getActiveEnvironment(nodeId);
+    
+    if (activeEnv) {
+      addLog('info', `🌍 [Ambiente: ${activeEnv.name}] resolvendo variáveis para o disparo...`);
+    } else if (parentWs) {
+      addLog('warn', `⚠️ [Aviso] Nenhum Ambiente ATIVO selecionado no Workspace "${parentWs.name}". Variáveis do ambiente não serão resolvidas.`);
+    } else {
+      addLog('error', `❌ [Erro de Escopo] Não foi possível localizar o Workspace para a requisição selecionada. As variáveis não serão carregadas.`);
+    }
+
     // Apply Vars to URL
-    let targetUrl = applyVariables(activeReq.url, activeReq.id);
+    let targetUrl = applyVariables(activeReq.url, nodeId);
 
     // 1. Resolve Path Params
     (activeReq.params || []).forEach(p => {
@@ -1164,29 +1372,19 @@ getman.log("Token renovado e salvo na pasta!");`;
       }
     });
 
-    // 2. Resolve Query Params (Rebuilding searching params to avoid duplicates)
-    try {
-      const parts = targetUrl.split('?');
-      const baseUrlOnly = parts[0];
-      const urlObjForQueries = new URL(baseUrlOnly.includes('://') ? baseUrlOnly : `http://localhost/${baseUrlOnly}`);
+      // 2. Resolve Query Params
+      try {
+        const queryParts = (activeReq.queryParams || [])
+          .filter(q => q.enabled && q.key.trim())
+          .map(q => `${encodeURIComponent(applyVariables(q.key.trim(), activeReq.id))}=${encodeURIComponent(applyVariables(q.value.trim(), activeReq.id))}`);
 
-      // Reset params and rebuild from our source of truth
-      urlObjForQueries.search = '';
-
-      (activeReq.queryParams || []).forEach(q => {
-        if (q.enabled && q.key.trim()) {
-          urlObjForQueries.searchParams.append(applyVariables(q.key.trim(), activeReq.id), applyVariables(q.value.trim(), activeReq.id));
+        if (queryParts.length > 0) {
+          const separator = targetUrl.includes('?') ? '&' : '?';
+          targetUrl += separator + queryParts.join('&');
         }
-      });
-
-      if (!targetUrl.includes('://')) {
-        targetUrl = urlObjForQueries.toString().replace('http://localhost/', '');
-      } else {
-        targetUrl = urlObjForQueries.toString();
+      } catch (e) {
+        // Fallback
       }
-    } catch (e) {
-      // Fallback
-    }
 
     addLog('info', ` INICIANDO REQUISIÇÃO: ${activeReq.method} ${targetUrl}`);
 
@@ -1230,22 +1428,31 @@ getman.log("Token renovado e salvo na pasta!");`;
           if (resolvedAuth.apiKeyIn === 'header') {
             fetchHeaders[keyStr] = valStr;
           } else {
-            const urlObj = new URL(finalTargetUrl);
-            urlObj.searchParams.append(keyStr, valStr);
-            finalTargetUrl = urlObj.toString();
+            const separator = finalTargetUrl.includes('?') ? '&' : '?';
+            finalTargetUrl += `${separator}${encodeURIComponent(keyStr)}=${encodeURIComponent(valStr)}`;
           }
         }
       }
 
-      const opts: RequestInit = {
+      const opts: RequestInit & { signal?: AbortSignal } = {
         method: activeReq.method,
         headers: fetchHeaders,
+        signal: abortControllerRef.current?.signal
       };
 
       // 3. Construct Request Body based on bodyType
       if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(activeReq.method) && activeReq.bodyType !== 'none') {
         if (activeReq.bodyType === 'json' && activeReq.body) {
           opts.body = applyVariables(activeReq.body, activeReq.id);
+          const hasContentType = Object.keys(fetchHeaders).some(k => k.toLowerCase() === 'content-type');
+          if (!hasContentType) fetchHeaders['Content-Type'] = 'application/json';
+        }
+        else if (activeReq.bodyType === 'graphql' && activeReq.graphqlQuery) {
+          const bodyPayload = {
+            query: applyVariables(activeReq.graphqlQuery, activeReq.id),
+            variables: activeReq.graphqlVariables ? JSON.parse(applyVariables(activeReq.graphqlVariables, activeReq.id)) : {}
+          };
+          opts.body = JSON.stringify(bodyPayload);
           const hasContentType = Object.keys(fetchHeaders).some(k => k.toLowerCase() === 'content-type');
           if (!hasContentType) fetchHeaders['Content-Type'] = 'application/json';
         }
@@ -1281,22 +1488,18 @@ getman.log("Token renovado e salvo na pasta!");`;
         }
       }
 
-      if (!finalTargetUrl.startsWith('http')) {
-        throw new Error('A URL resolvida aparentemente é inválida: ' + finalTargetUrl);
+      if (!finalTargetUrl.startsWith('http') && !finalTargetUrl.includes('://')) {
+        // Simple heuristic for URLs that might be missing protocol or variables not replaced correctly
+        if (!finalTargetUrl.startsWith('{{')) {
+          throw new Error('A URL resolvida aparentemente é inválida: ' + finalTargetUrl);
+        }
       }
-
-      const urlObj = new URL(finalTargetUrl);
-
-      const queryParams: Record<string, string> = {};
-      urlObj.searchParams.forEach((val, key) => queryParams[key] = val);
 
       const reqOutput: any = {
         Method: activeReq.method,
         URL: finalTargetUrl,
+        Headers: fetchHeaders
       };
-
-      if (Object.keys(queryParams).length > 0) reqOutput.QueryParams = queryParams;
-      if (Object.keys(fetchHeaders).length > 0) reqOutput.Headers = fetchHeaders;
 
       if (opts.body) {
         let parsedBody = opts.body;
@@ -1306,7 +1509,15 @@ getman.log("Token renovado e salvo na pasta!");`;
 
       addLog('log', `▶️ REQ OUT: Request Packet -> ${finalTargetUrl}`, reqOutput);
 
+      const fetchTimeoutId = setTimeout(() => {
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort('Timeout configurável excedido');
+        }
+      }, reqTimeoutMs);
+
       const res = await safeFetch(finalTargetUrl, opts);
+      clearTimeout(fetchTimeoutId);
+
       const contentType = res.headers.get('content-type') || '';
       let data: any;
       let responseType: 'json' | 'image' | 'pdf' | 'html' | 'text' | 'binary' = 'text';
@@ -1404,11 +1615,16 @@ getman.log("Token renovado e salvo na pasta!");`;
 
     } catch (err: any) {
       const timeMs = Date.now() - startTime;
-      const errData = err.message || err.toString();
+      let errData = err.message || err.toString();
+      
+      if (err.name === 'AbortError') {
+        errData = err.message.includes('Timeout') ? 'Timeout excedido (Cancelado)' : 'Requisição abortada pelo usuário';
+      }
+
       handleActiveReqChange({
         savedResponse: {
           status: 0,
-          statusText: 'Network Error (CORS/Failed)',
+          statusText: err.name === 'AbortError' ? 'Abortado' : 'Network Error',
           data: errData,
           time: timeMs
         }
@@ -1430,12 +1646,17 @@ getman.log("Token renovado e salvo na pasta!");`;
         Status: "0 Network Error",
         Time: `${timeMs}ms`,
         Error: errData,
-        Note: "Possible CORS, DNS issue, or connection refused."
+        Note: "Possible CORS, DNS issue, timeout, connection refused or manual abort."
       };
 
       addLog('error', `❌ Falha no disparo. Erro: ${errData}`, errOutput);
     } finally {
       setLoading(false);
+      abortControllerRef.current = null;
+      setShowLoadingOverlay(false);
+      if (loadingOverlayTimer.current) {
+        clearTimeout(loadingOverlayTimer.current);
+      }
     }
   };
 
@@ -1555,9 +1776,9 @@ getman.log("Token renovado e salvo na pasta!");`;
       };
 
       const AsyncFunction = Object.getPrototypeOf(async function () { }).constructor;
-      const fn = new AsyncFunction('getman', 'fetch', scriptBody);
+      const fn = new AsyncFunction('getman', 'fetch', 'tauriFetch', scriptBody);
 
-      await fn(getmanCtx, customFetch);
+      await fn(getmanCtx, customFetch, customFetch);
 
       addLog('success', `✅ Script finalizado! Variáveis injetadas com sucesso.`);
     } catch (err: any) {
@@ -1795,6 +2016,7 @@ getman.log("Token renovado e salvo na pasta!");`;
 
   const renderConsole = (logs: LogEntry[] | undefined, onClear: () => void) => {
     const list = logs || [];
+
     return (
       <div className="console-panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
         <div className="console-header" style={{ padding: '8px 12px', background: 'rgba(0,0,0,0.2)', marginBottom: '0' }}>
@@ -1831,6 +2053,7 @@ getman.log("Token renovado e salvo na pasta!");`;
               Nenhum log disponível.
             </div>
           )}
+          <AutoScrollEnd dependency={list} />
         </div>
       </div>
     );
@@ -2068,6 +2291,9 @@ getman.log("Token renovado e salvo na pasta!");`;
                 <>
                   <button onClick={() => { addRequestToFolder(node.id); setOpenMenuNodeId(null); }}>
                     <FilePlus size={13} /> Nova Requisição
+                  </button>
+                  <button onClick={() => { addWebSocketToFolder(node.id); setOpenMenuNodeId(null); }}>
+                    <Globe size={13} /> Nova Conexão WS
                   </button>
                   <button onClick={() => { addFolderTo(node.id); setOpenMenuNodeId(null); }}>
                     <Folder size={13} /> Nova Pasta
@@ -2447,7 +2673,10 @@ getman.log("Token renovado e salvo na pasta!");`;
                 </h1>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button className="btn btn-secondary" onClick={() => addRequestToFolder(activeNode.id)} style={{ padding: '8px 14px', fontSize: '12px' }}>
-                    <Plus size={14} /> Requisição
+                    <Plus size={14} /> HTTP
+                  </button>
+                  <button className="btn btn-secondary" onClick={() => addWebSocketToFolder(activeNode.id)} style={{ padding: '8px 14px', fontSize: '12px' }}>
+                    <Globe size={14} /> WS
                   </button>
                   <button className="btn btn-secondary" onClick={() => addFolderTo(activeNode.id)} style={{ padding: '8px 14px', fontSize: '12px' }}>
                     <Folder size={14} /> Pasta
@@ -2602,7 +2831,7 @@ getman.log("Token renovado e salvo na pasta!");`;
                 </div>
               )}
 
-              {/* ─── TAB: RESUMO ─── */}
+              {/* ─── TAB: RESUMO/CONFIG ─── */}
               {activeWorkspaceTab === 'summary' && (
                 <div className="fade-in" style={{ padding: '24px 32px', flex: 1, overflowY: 'auto' }}>
                   <div className="glass-panel" style={{ padding: '20px', marginBottom: '20px' }}>
@@ -2619,6 +2848,25 @@ getman.log("Token renovado e salvo na pasta!");`;
                       <div style={{ padding: '20px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', textAlign: 'center' }}>
                         <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--text-primary)' }}>{activeNode.workspaceConfig?.history?.length || 0}</div>
                         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>No Histórico</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="glass-panel" style={{ padding: '20px', marginBottom: '20px' }}>
+                    <h3 style={{ marginBottom: '16px', fontSize: '16px', color: 'var(--text-primary)' }}>⚙️ Configurações Globais do App</h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '400px' }}>
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', color: 'var(--text-secondary)' }}>Timeout de Requisições (segundos)</label>
+                        <input
+                          type="number"
+                          className="text-input"
+                          value={reqTimeoutMs / 1000}
+                          onChange={e => setReqTimeoutMs(Math.max(1, Number(e.target.value)) * 1000)}
+                          style={{ width: '100%' }}
+                        />
+                        <p style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                          Tempo máximo de espera antes de cancelar automaticamente a requisição.
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -2792,393 +3040,507 @@ getman.log("Token renovado e salvo na pasta!");`;
           <>
             {/* Header URL Bar */}
             <div className="workspace-header">
-              <div className="url-bar-container">
-                <select
-                  value={activeReq!.method}
-                  onChange={e => handleActiveReqChange({ method: e.target.value as HttpMethod })}
-                  className={`method-select method-${activeReq!.method}`}
-                >
-                  <option value="GET" className="method-GET">GET</option>
-                  <option value="POST" className="method-POST">POST</option>
-                  <option value="PUT" className="method-PUT">PUT</option>
-                  <option value="PATCH" className="method-PATCH">PATCH</option>
-                  <option value="DELETE" className="method-DELETE">DELETE</option>
-                </select>
-                <div style={{ width: '1px', height: '24px', background: 'var(--border-strong)' }} />
+              <div className="url-bar-container" style={{ margin: 0, height: '44px', paddingLeft: '2px' }}>
+                {activeReq!.method === 'WS' ? (
+                  <div style={{ padding: '0 16px', fontWeight: 900, fontSize: '14px', color: 'var(--accent-primary)', letterSpacing: '1px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Globe size={16} /> WS
+                  </div>
+                ) : (
+                  <>
+                    <select
+                      value={activeReq!.method}
+                      onChange={e => handleActiveReqChange({ method: e.target.value as HttpMethod })}
+                      className={`method-select method-${activeReq!.method}`}
+                      style={{ flexShrink: 0, width: '110px' }}
+                    >
+                      <option value="GET" className="method-GET">GET</option>
+                      <option value="POST" className="method-POST">POST</option>
+                      <option value="PUT" className="method-PUT">PUT</option>
+                      <option value="PATCH" className="method-PATCH">PATCH</option>
+                      <option value="DELETE" className="method-DELETE">DELETE</option>
+                    </select>
+                    <div style={{ width: '1px', height: '24px', background: 'var(--border-strong)' }} />
+                  </>
+                )}
                 <input
                   type="text"
                   value={activeReq!.url}
                   onChange={e => handleActiveReqChange({ url: e.target.value })}
-                  placeholder="{{base_url}}/v1/users"
+                  placeholder={activeReq!.method === 'WS' ? "wss://echo.websocket.org..." : "{{base_url}}/api/..."}
                   style={{ fontSize: '15px', fontFamily: 'var(--font-mono)', letterSpacing: '0.3px', flex: 1, background: 'transparent' }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') handleSend();
+                  }}
                 />
               </div>
-              <button className="btn btn-secondary" onClick={() => setIsCodeModalOpen(true)} title="Gerar Snippet de Código">
-                <Terminal size={16} />
-              </button>
-              <button className="btn btn-primary btn-send" onClick={handleSend} disabled={loading || isLooping}>
-                <Send size={16} /> {loading ? 'Enviando...' : 'Fazer Disparo'}
-              </button>
 
-              <div className="loop-controls">
-                <span title="Disparo agendado / loop automático"><Clock size={16} className="text-muted" /></span>
-                <input
-                  type="number"
-                  value={intervalMs}
-                  onChange={e => setIntervalMs(Math.max(100, Number(e.target.value)))}
-                  className="interval-input"
-                  title="Intervalo milissegundos"
-                  disabled={isLooping}
-                />
+              {activeReq!.method === 'WS' ? (
                 <button
-                  className={`btn ${isLooping ? 'btn-danger' : 'btn-secondary'}`}
-                  style={{ padding: '10px 14px' }}
-                  onClick={() => setIsLooping(!isLooping)}
-                  title={isLooping ? "Parar LOOP Automático" : "Derrubar a API (Loop Auto)"}
+                  className={`btn ${wsConnected ? 'btn-danger' : 'btn-primary'} btn-send`}
+                  onClick={handleSend}
+                  disabled={loading}
                 >
-                  {isLooping ? <Square size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+                  <Globe size={16} /> {wsConnected ? 'Desconectar' : (loading ? 'Conectando...' : 'Conectar WS')}
                 </button>
-              </div>
+              ) : (
+                <>
+                  <button className="btn btn-secondary" onClick={() => setIsCodeModalOpen(true)} title="Gerar Snippet de Código">
+                    <Terminal size={16} />
+                  </button>
+                  {loading && !isLooping ? (
+                    <button className="btn btn-danger btn-send" onClick={cancelReq} title="Cancelar Requisição">
+                      <Square size={16} fill="currentColor" /> Cancelar
+                    </button>
+                  ) : (
+                    <button className="btn btn-primary btn-send" onClick={handleSend} disabled={isLooping}>
+                      <Send size={16} /> Fazer Disparo
+                    </button>
+                  )}
+
+                  <div className="loop-controls">
+                    <span title="Disparo agendado / loop automático"><Clock size={16} className="text-muted" /></span>
+                    <input
+                      type="number"
+                      value={intervalMs}
+                      onChange={e => setIntervalMs(Math.max(100, Number(e.target.value)))}
+                      className="interval-input"
+                      title="Intervalo milissegundos"
+                      disabled={isLooping}
+                    />
+                    <button
+                      className={`btn ${isLooping ? 'btn-danger' : 'btn-secondary'}`}
+                      style={{ padding: '10px 14px' }}
+                      onClick={() => setIsLooping(!isLooping)}
+                      title={isLooping ? "Parar LOOP Automático" : "Derrubar a API (Loop Auto)"}
+                    >
+                      {isLooping ? <Square size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Request Settings Tab Content */}
             <div className="editor-layout">
               <div className="request-panel" style={{ width: leftPanelWidth, flex: 'none' }}>
-                <div className="tabs">
-                  <div className={`tab ${activeReqTab === 'params' ? 'active' : ''}`} onClick={() => setActiveReqTab('params')}>Params (URL)</div>
-                  <div className={`tab ${activeReqTab === 'queries' ? 'active' : ''}`} onClick={() => setActiveReqTab('queries')}>Queries <span className="badge">{(activeReq!.queryParams || []).filter(q => q.key).length || ''}</span></div>
-                  <div className={`tab ${activeReqTab === 'auth' ? 'active' : ''}`} onClick={() => setActiveReqTab('auth')}>Autenticação</div>
-                  <div className={`tab ${activeReqTab === 'headers' ? 'active' : ''}`} onClick={() => setActiveReqTab('headers')}>Headers Custo. <span className="badge">{(activeReq!.headers || []).filter(h => h.key).length || ''}</span></div>
-                  <div className={`tab ${activeReqTab === 'body' ? 'active' : ''}`} onClick={() => setActiveReqTab('body')}>Payload / Body</div>
-                </div>
-
-                <div style={{ padding: '16px 12px', flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
-                  {activeReqTab === 'params' && (
-                    <div className="headers-container" style={{ marginTop: 0 }}>
-                      <h3 style={{ marginBottom: '16px', color: 'var(--text-primary)', fontSize: '15px' }}>Path Parameters</h3>
-                      <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '16px' }}>Reemplace <code>:id</code> o <code>{'{id}'}</code> en la URL.</p>
-                      {renderVarTable(activeReq!.params || [], (v) => handleActiveReqChange({ params: v }), '', true)}
-                    </div>
-                  )}
-
-                  {activeReqTab === 'queries' && (
-                    <div className="headers-container" style={{ marginTop: 0 }}>
-                      <h3 style={{ marginBottom: '16px', color: 'var(--text-primary)', fontSize: '15px' }}>Query Parameters</h3>
-                      {renderVarTable(activeReq!.queryParams || [], (v) => handleActiveReqChange({ queryParams: v }), '', true)}
-                    </div>
-                  )}
-
-                  {activeReqTab === 'auth' && (
-                    <div className="glass-panel" style={{ padding: '24px 32px' }}>
-                      <div style={{ marginBottom: '16px' }}>
-                        <label style={{ color: 'var(--text-secondary)', display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 600 }}>Sobrescrever Auth da Pasta</label>
-                        <select
-                          value={activeReq!.auth.type}
-                          onChange={e => handleActiveReqChange({ auth: { ...activeReq!.auth, type: e.target.value as AuthType } })}
-                          className="select-input"
-                          style={{ width: '300px' }}
-                        >
-                          <option value="inherit">Inherit Auth (Herdar do Pai)</option>
-                          <option value="none">No Auth (Deixar Vazio)</option>
-                          <option value="bearer">Bearer Token Mestre</option>
-                          <option value="oauth2">OAuth 2.0 (Token)</option>
-                          <option value="basic">Basic Auth User</option>
-                          <option value="apikey">API Key Custo.</option>
-                        </select>
-
-                        {activeReq!.auth.type === 'inherit' && (
-                          <div style={{ marginTop: '16px', padding: '12px 16px', background: 'rgba(99, 102, 241, 0.1)', borderLeft: '3px solid var(--accent-primary)', borderRadius: '4px' }}>
-                            <p style={{ color: 'var(--text-primary)', fontSize: '13px', margin: 0 }}>
-                              Esta requisição herda a autenticação da pasta pai. Certifique-se que a pasta pai tem um Bearer Token configurado (pode ser {'{{var}}'}).
-                            </p>
-                          </div>
-                        )}
-                      </div>
-
-                      {renderAuthFields(activeReq!.auth, (updates) => handleActiveReqChange({ auth: { ...activeReq!.auth, ...updates } }))}
-                    </div>
-                  )}
-
-                  {activeReqTab === 'headers' && (
-                    <div className="headers-container">
-                      <div className="headers-grid header-row-title" style={{ gridTemplateColumns: '30px 1fr 1fr 40px' }}>
-                        <div></div>
-                        <div>Chave / Header Key</div>
-                        <div>Valor da Chave</div>
-                        <div></div>
-                      </div>
-                      {activeReq!.headers.map((h, i) => (
-                        <div key={h.id} className="headers-grid" style={{ gridTemplateColumns: '30px 1fr 1fr 40px', alignItems: 'center', opacity: h.enabled ? 1 : 0.4 }}>
-                          <input
-                            type="checkbox"
-                            checked={h.enabled}
-                            onChange={e => {
-                              const newHeaders = [...activeReq!.headers];
-                              newHeaders[i].enabled = e.target.checked;
-                              handleActiveReqChange({ headers: newHeaders });
-                            }}
-                          />
-                          <input
-                            className="text-input"
-                            placeholder="Ex: Content-Type"
-                            value={h.key}
-                            list="common-headers"
-                            onChange={e => {
-                              const newHeaders = [...activeReq!.headers];
-                              newHeaders[i].key = e.target.value;
-                              handleActiveReqChange({ headers: newHeaders });
-                            }}
-                          />
-                          <input
-                            className="text-input"
-                            placeholder="Ex: application/json ou {{var}}"
-                            value={h.value}
-                            onChange={e => {
-                              const newHeaders = [...activeReq!.headers];
-                              newHeaders[i].value = e.target.value;
-                              handleActiveReqChange({ headers: newHeaders });
-                            }}
-                          />
-                          <button
-                            className="btn-icon danger" style={{ border: '1px solid var(--border-subtle)' }}
-                            onClick={() => {
-                              const newHeaders = activeReq!.headers.filter(hx => hx.id !== h.id);
-                              handleActiveReqChange({ headers: newHeaders });
-                            }}
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                {activeReq!.method === 'WS' ? (
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-panel-solid)', height: '100%' }}>
+                    {/* WS Chat interface */}
+                    <div style={{ padding: '16px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.1)' }}>
+                      {activeReq!.wsMessages?.length === 0 && (
+                        <div style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: '40px' }}>Conecte a um WebSocket para começar a enviar mensagens.</div>
+                      )}
+                      {activeReq!.wsMessages?.map(m => (
+                        <div key={m.id} style={{
+                          alignSelf: m.type === 'sent' ? 'flex-end' : (m.type === 'received' ? 'flex-start' : 'center'),
+                          background: m.type === 'sent' ? 'var(--accent-primary)' : (m.type === 'received' ? 'rgba(255,255,255,0.05)' : 'transparent'),
+                          color: m.type === 'info' ? 'var(--text-muted)' : (m.type === 'error' ? 'var(--danger)' : '#fff'),
+                          padding: m.type === 'info' || m.type === 'error' ? '4px' : '10px 14px',
+                          borderRadius: '8px',
+                          maxWidth: '80%',
+                          fontSize: '13px',
+                          border: m.type === 'received' ? '1px solid var(--border-strong)' : 'none',
+                          boxShadow: m.type === 'sent' ? '0 4px 10px rgba(99,102,241,0.2)' : 'none'
+                        }}>
+                          {m.type === 'sent' ? <span style={{ fontSize: '10px', opacity: 0.7, marginRight: '8px' }}>⇧ Enviado</span> : ''}
+                          {m.type === 'received' ? <span style={{ fontSize: '10px', opacity: 0.5, marginRight: '8px', color: 'var(--success)' }}>⇩ Recebido</span> : ''}
+                          <pre style={{ margin: 0, fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap' }}>{m.text}</pre>
                         </div>
                       ))}
-                      <button
-                        className="btn btn-secondary"
-                        style={{ marginTop: '16px' }}
-                        onClick={() => {
-                          handleActiveReqChange({ headers: [...activeReq!.headers, { id: uuidv4(), key: '', value: '', enabled: true }] });
-                        }}
-                      >
-                        <Plus size={16} /> Nova Linha de Header
-                      </button>
-
-                      <datalist id="common-headers">
-                        <option value="Content-Type" />
-                        <option value="Accept" />
-                        <option value="Authorization" />
-                        <option value="Cache-Control" />
-                        <option value="User-Agent" />
-                        <option value="X-Requested-With" />
-                        <option value="Origin" />
-                        <option value="Referer" />
-                      </datalist>
+                      <AutoScrollEnd dependency={activeReq!.wsMessages} />
                     </div>
-                  )}
+                    {/* Message input bar */}
+                    <div style={{ padding: '16px', background: 'rgba(0,0,0,0.2)', borderTop: '1px solid var(--border-subtle)', display: 'flex', gap: '12px' }}>
+                      <textarea
+                        value={wsInputMessage}
+                        onChange={e => setWsInputMessage(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendWsMessage(); }
+                        }}
+                        placeholder="Escreva a mensagem (Enter para enviar)..."
+                        className="text-input"
+                        style={{ minHeight: '44px', height: '44px', resize: 'none' }}
+                      />
+                      <button className="btn btn-primary" onClick={sendWsMessage} disabled={!wsConnected || !wsInputMessage.trim()}>
+                        <Send size={16} />
+                      </button>
+                      <button className="btn btn-secondary" onClick={() => handleActiveReqChange({ wsMessages: [] })}>
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="tabs">
+                      <div className={`tab ${activeReqTab === 'params' ? 'active' : ''}`} onClick={() => setActiveReqTab('params')}>Params (URL)</div>
+                      <div className={`tab ${activeReqTab === 'queries' ? 'active' : ''}`} onClick={() => setActiveReqTab('queries')}>Queries <span className="badge">{(activeReq!.queryParams || []).filter(q => q.key).length || ''}</span></div>
+                      <div className={`tab ${activeReqTab === 'auth' ? 'active' : ''}`} onClick={() => setActiveReqTab('auth')}>Autenticação</div>
+                      <div className={`tab ${activeReqTab === 'headers' ? 'active' : ''}`} onClick={() => setActiveReqTab('headers')}>Headers Custo. <span className="badge">{(activeReq!.headers || []).filter(h => h.key).length || ''}</span></div>
+                      <div className={`tab ${activeReqTab === 'body' ? 'active' : ''}`} onClick={() => setActiveReqTab('body')}>Payload / Body</div>
+                    </div>
 
-                  {activeReqTab === 'body' && (
-                    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <div className="body-type-selector" style={{ display: 'flex', gap: '12px', padding: '0 4px', marginBottom: '8px' }}>
-                        {(['none', 'json', 'form-data', 'urlencoded', 'binary'] as RequestBodyType[]).map(type => (
-                          <label key={type} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: activeReq!.bodyType === type ? 'var(--accent-primary)' : 'var(--text-muted)' }}>
-                            <input
-                              type="radio"
-                              name="bodyType"
-                              checked={activeReq!.bodyType === type}
-                              onChange={() => handleActiveReqChange({ bodyType: type })}
-                              style={{ accentColor: 'var(--accent-primary)', width: '12px', height: '12px' }}
-                            />
-                            {type === 'urlencoded' ? 'x-www-form-urlencoded' : type.toUpperCase()}
-                          </label>
-                        ))}
-                      </div>
+                    <div style={{ padding: '16px 12px', flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+                      {activeReqTab === 'params' && (
+                        <div className="headers-container" style={{ marginTop: 0 }}>
+                          <h3 style={{ marginBottom: '16px', color: 'var(--text-primary)', fontSize: '15px' }}>Path Parameters</h3>
+                          <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '16px' }}>Reemplace <code>:id</code> o <code>{'{id}'}</code> en la URL.</p>
+                          {renderVarTable(activeReq!.params || [], (v) => handleActiveReqChange({ params: v }), '', true)}
+                        </div>
+                      )}
 
-                      <div style={{ flex: 1, borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-subtle)', background: '#282c34', minHeight: '200px' }}>
-                        {activeReq!.bodyType === 'json' && (
-                          <CodeMirror
-                            value={activeReq!.body}
-                            style={{ height: '100%' }}
-                            height="100%"
-                            theme={oneDark}
-                            extensions={[json()]}
-                            onChange={(val) => handleActiveReqChange({ body: val })}
-                            basicSetup={{ lineNumbers: true, tabSize: 2, autocompletion: true, foldGutter: true }}
-                          />
-                        )}
+                      {activeReqTab === 'queries' && (
+                        <div className="headers-container" style={{ marginTop: 0 }}>
+                          <h3 style={{ marginBottom: '16px', color: 'var(--text-primary)', fontSize: '15px' }}>Query Parameters</h3>
+                          {renderVarTable(activeReq!.queryParams || [], (v) => handleActiveReqChange({ queryParams: v }), '', true)}
+                        </div>
+                      )}
 
-                        {activeReq!.bodyType === 'form-data' && (
-                          <div className="headers-container" style={{ padding: '12px', overflowY: 'auto', height: '100%' }}>
-                            <div className="headers-grid header-row-title" style={{ gridTemplateColumns: '30px 1fr 1fr 100px 40px' }}>
-                              <div></div>
-                              <div>Key</div>
-                              <div>Value / File</div>
-                              <div>Type</div>
-                              <div></div>
-                            </div>
-                            {activeReq!.formData.map((f) => (
-                              <div key={f.id} className="headers-grid" style={{ gridTemplateColumns: '30px 1fr 1fr 100px 40px', alignItems: 'center', opacity: f.enabled ? 1 : 0.4 }}>
-                                <input
-                                  type="checkbox"
-                                  checked={f.enabled}
-                                  onChange={e => {
-                                    const next = [...activeReq!.formData];
-                                    const idx = next.findIndex(x => x.id === f.id);
-                                    next[idx].enabled = e.target.checked;
-                                    handleActiveReqChange({ formData: next });
-                                  }}
-                                />
-                                <input
-                                  className="text-input"
-                                  placeholder="Key"
-                                  value={f.key}
-                                  onChange={e => {
-                                    const next = [...activeReq!.formData];
-                                    next.find(x => x.id === f.id)!.key = e.target.value;
-                                    handleActiveReqChange({ formData: next });
-                                  }}
-                                />
-                                {f.type === 'text' ? (
-                                  <input
-                                    className="text-input"
-                                    placeholder="Value"
-                                    value={f.value}
-                                    onChange={e => {
-                                      const next = [...activeReq!.formData];
-                                      next.find(x => x.id === f.id)!.value = e.target.value;
-                                      handleActiveReqChange({ formData: next });
-                                    }}
-                                  />
-                                ) : (
-                                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                    <button className="btn btn-secondary" style={{ fontSize: '11px', padding: '4px 8px' }} onClick={() => pickFormDataFile(f.id)}>
-                                      {f.fileInfo ? 'Trocar' : 'Escolher'}
-                                    </button>
-                                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                      {f.fileInfo?.name || 'Nenhum arquivo'}
-                                    </span>
-                                  </div>
-                                )}
-                                <select
-                                  value={f.type}
-                                  className="select-input"
-                                  style={{ fontSize: '11px', padding: '4px' }}
-                                  onChange={e => {
-                                    const next = [...activeReq!.formData];
-                                    const idx = next.findIndex(x => x.id === f.id);
-                                    next[idx].type = e.target.value as 'text' | 'file';
-                                    handleActiveReqChange({ formData: next });
-                                  }}
-                                >
-                                  <option value="text">Text</option>
-                                  <option value="file">File</option>
-                                </select>
-                                <button className="btn-icon danger" onClick={() => {
-                                  handleActiveReqChange({ formData: activeReq!.formData.filter(fx => fx.id !== f.id) });
-                                }}>
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
-                            ))}
-                            <button className="btn btn-secondary" style={{ marginTop: '12px', fontSize: '11px' }} onClick={() => {
-                              handleActiveReqChange({ formData: [...activeReq!.formData, { id: uuidv4(), key: '', value: '', type: 'text', enabled: true }] });
-                            }}>
-                              <Plus size={14} /> Adicionar Campo
-                            </button>
-                          </div>
-                        )}
+                      {activeReqTab === 'auth' && (
+                        <div className="glass-panel" style={{ padding: '24px 32px' }}>
+                          <div style={{ marginBottom: '16px' }}>
+                            <label style={{ color: 'var(--text-secondary)', display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 600 }}>Sobrescrever Auth da Pasta</label>
+                            <select
+                              value={activeReq!.auth.type}
+                              onChange={e => handleActiveReqChange({ auth: { ...activeReq!.auth, type: e.target.value as AuthType } })}
+                              className="select-input"
+                              style={{ width: '300px' }}
+                            >
+                              <option value="inherit">Inherit Auth (Herdar do Pai)</option>
+                              <option value="none">No Auth (Deixar Vazio)</option>
+                              <option value="bearer">Bearer Token Mestre</option>
+                              <option value="oauth2">OAuth 2.0 (Token)</option>
+                              <option value="basic">Basic Auth User</option>
+                              <option value="apikey">API Key Custo.</option>
+                            </select>
 
-                        {activeReq!.bodyType === 'urlencoded' && (
-                          <div className="headers-container" style={{ padding: '12px', overflowY: 'auto', height: '100%' }}>
-                            <div className="headers-grid header-row-title" style={{ gridTemplateColumns: '30px 1fr 1fr 40px' }}>
-                              <div></div>
-                              <div>Key</div>
-                              <div>Value</div>
-                              <div></div>
-                            </div>
-                            {/* Reusing common logic for urlencoded pairs */}
-                            {activeReq!.formData.filter(f => f.type === 'text').map((f) => (
-                              <div key={f.id} className="headers-grid" style={{ gridTemplateColumns: '30px 1fr 1fr 40px', alignItems: 'center', opacity: f.enabled ? 1 : 0.4 }}>
-                                <input
-                                  type="checkbox"
-                                  checked={f.enabled}
-                                  onChange={e => {
-                                    const next = [...activeReq!.formData];
-                                    const idx = next.findIndex(x => x.id === f.id);
-                                    next[idx].enabled = e.target.checked;
-                                    handleActiveReqChange({ formData: next });
-                                  }}
-                                />
-                                <input
-                                  className="text-input"
-                                  placeholder="Key"
-                                  value={f.key}
-                                  onChange={e => {
-                                    const next = [...activeReq!.formData];
-                                    const idx = next.findIndex(x => x.id === f.id);
-                                    next[idx].key = e.target.value;
-                                    handleActiveReqChange({ formData: next });
-                                  }}
-                                />
-                                <input
-                                  className="text-input"
-                                  placeholder="Value"
-                                  value={f.value}
-                                  onChange={e => {
-                                    const next = [...activeReq!.formData];
-                                    const idx = next.findIndex(x => x.id === f.id);
-                                    next[idx].value = e.target.value;
-                                    handleActiveReqChange({ formData: next });
-                                  }}
-                                />
-                                <button className="btn-icon danger" onClick={() => {
-                                  handleActiveReqChange({ formData: activeReq!.formData.filter(fx => fx.id !== f.id) });
-                                }}>
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
-                            ))}
-                            <button className="btn btn-secondary" style={{ marginTop: '12px', fontSize: '11px' }} onClick={() => {
-                              handleActiveReqChange({ formData: [...activeReq!.formData, { id: uuidv4(), key: '', value: '', type: 'text', enabled: true }] });
-                            }}>
-                              <Plus size={14} /> Adicionar Par Chave/Valor
-                            </button>
-                          </div>
-                        )}
-
-                        {activeReq!.bodyType === 'binary' && (
-                          <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '20px', padding: '40px' }}>
-                            <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(99, 102, 241, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                              <Download size={32} className="text-accent" style={{ opacity: 0.6 }} />
-                            </div>
-                            <div style={{ textAlign: 'center' }}>
-                              <h3 style={{ fontSize: '16px', marginBottom: '8px' }}>Corpo Binário (Binary Body)</h3>
-                              <p style={{ color: 'var(--text-muted)', fontSize: '13px', maxWidth: '300px' }}>Selecione um arquivo para ser enviado como o corpo bruto (raw byte array) desta requisição.</p>
-                            </div>
-                            <button className="btn btn-primary" onClick={pickBinaryFile}>
-                              <Upload size={16} /> {activeReq!.binaryFile ? 'Alterar Arquivo' : 'Selecionar Arquivo'}
-                            </button>
-                            {activeReq!.binaryFile && (
-                              <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px 20px', borderRadius: '8px', border: '1px solid var(--border-subtle)', display: 'flex', gap: '12px', alignItems: 'center' }}>
-                                <FileText size={18} className="text-info" />
-                                <div style={{ textAlign: 'left' }}>
-                                  <div style={{ fontSize: '13px', fontWeight: 600 }}>{activeReq!.binaryFile.name}</div>
-                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', wordBreak: 'break-all' }}>{activeReq!.binaryFile.path}</div>
-                                </div>
-                                <button className="btn-icon danger" onClick={() => handleActiveReqChange({ binaryFile: null })}>
-                                  <Trash2 size={16} />
-                                </button>
+                            {activeReq!.auth.type === 'inherit' && (
+                              <div style={{ marginTop: '16px', padding: '12px 16px', background: 'rgba(99, 102, 241, 0.1)', borderLeft: '3px solid var(--accent-primary)', borderRadius: '4px' }}>
+                                <p style={{ color: 'var(--text-primary)', fontSize: '13px', margin: 0 }}>
+                                  Esta requisição herda a autenticação da pasta pai. Certifique-se que a pasta pai tem um Bearer Token configurado (pode ser {'{{var}}'}).
+                                </p>
                               </div>
                             )}
                           </div>
-                        )}
 
-                        {activeReq!.bodyType === 'none' && (
-                          <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', gap: '12px' }}>
-                            <AlertTriangle size={32} style={{ opacity: 0.2 }} />
-                            <span>Esta requisição não enviará corpo (body).</span>
+                          {renderAuthFields(activeReq!.auth, (updates) => handleActiveReqChange({ auth: { ...activeReq!.auth, ...updates } }))}
+                        </div>
+                      )}
+
+                      {activeReqTab === 'headers' && (
+                        <div className="headers-container">
+                          <div className="headers-grid header-row-title" style={{ gridTemplateColumns: '30px 1fr 1fr 40px' }}>
+                            <div></div>
+                            <div>Chave / Header Key</div>
+                            <div>Valor da Chave</div>
+                            <div></div>
                           </div>
-                        )}
-                      </div>
+                          {activeReq!.headers.map((h, i) => (
+                            <div key={h.id} className="headers-grid" style={{ gridTemplateColumns: '30px 1fr 1fr 40px', alignItems: 'center', opacity: h.enabled ? 1 : 0.4 }}>
+                              <input
+                                type="checkbox"
+                                checked={h.enabled}
+                                onChange={e => {
+                                  const newHeaders = [...activeReq!.headers];
+                                  newHeaders[i].enabled = e.target.checked;
+                                  handleActiveReqChange({ headers: newHeaders });
+                                }}
+                              />
+                              <input
+                                className="text-input"
+                                placeholder="Ex: Content-Type"
+                                value={h.key}
+                                list="common-headers"
+                                onChange={e => {
+                                  const newHeaders = [...activeReq!.headers];
+                                  newHeaders[i].key = e.target.value;
+                                  handleActiveReqChange({ headers: newHeaders });
+                                }}
+                              />
+                              <input
+                                className="text-input"
+                                placeholder="Ex: application/json ou {{var}}"
+                                value={h.value}
+                                onChange={e => {
+                                  const newHeaders = [...activeReq!.headers];
+                                  newHeaders[i].value = e.target.value;
+                                  handleActiveReqChange({ headers: newHeaders });
+                                }}
+                              />
+                              <button
+                                className="btn-icon danger" style={{ border: '1px solid var(--border-subtle)' }}
+                                onClick={() => {
+                                  const newHeaders = activeReq!.headers.filter(hx => hx.id !== h.id);
+                                  handleActiveReqChange({ headers: newHeaders });
+                                }}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          ))}
+                          <button
+                            className="btn btn-secondary"
+                            style={{ marginTop: '16px' }}
+                            onClick={() => {
+                              handleActiveReqChange({ headers: [...activeReq!.headers, { id: uuidv4(), key: '', value: '', enabled: true }] });
+                            }}
+                          >
+                            <Plus size={16} /> Nova Linha de Header
+                          </button>
+
+                          <datalist id="common-headers">
+                            <option value="Content-Type" />
+                            <option value="Accept" />
+                            <option value="Authorization" />
+                            <option value="Cache-Control" />
+                            <option value="User-Agent" />
+                            <option value="X-Requested-With" />
+                            <option value="Origin" />
+                            <option value="Referer" />
+                          </datalist>
+                        </div>
+                      )}
+
+                      {activeReqTab === 'body' && (
+                        <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <div className="body-type-selector" style={{ display: 'flex', gap: '12px', padding: '0 4px', marginBottom: '8px' }}>
+                            {(['none', 'json', 'graphql', 'form-data', 'urlencoded', 'binary'] as RequestBodyType[]).map(type => (
+                              <label key={type} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: activeReq!.bodyType === type ? 'var(--accent-primary)' : 'var(--text-muted)' }}>
+                                <input
+                                  type="radio"
+                                  name="bodyType"
+                                  checked={activeReq!.bodyType === type}
+                                  onChange={() => handleActiveReqChange({ bodyType: type })}
+                                  style={{ accentColor: 'var(--accent-primary)', width: '12px', height: '12px' }}
+                                />
+                                {type === 'urlencoded' ? 'x-www-form-urlencoded' : type.toUpperCase()}
+                              </label>
+                            ))}
+                          </div>
+
+                          <div style={{ flex: 1, borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-subtle)', background: '#282c34', minHeight: '200px' }}>
+                            {activeReq!.bodyType === 'json' && (
+                              <CodeMirror
+                                value={activeReq!.body}
+                                style={{ height: '100%' }}
+                                height="100%"
+                                theme={oneDark}
+                                extensions={[json()]}
+                                onChange={(val) => handleActiveReqChange({ body: val })}
+                                basicSetup={{ lineNumbers: true, tabSize: 2, autocompletion: true, foldGutter: true }}
+                              />
+                            )}
+
+                            {activeReq!.bodyType === 'graphql' && (
+                              <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                                <div style={{ flex: 2, borderBottom: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column' }}>
+                                  <div style={{ padding: '4px 8px', fontSize: '11px', color: 'var(--accent-primary)', background: 'rgba(0,0,0,0.2)', fontWeight: 600 }}>Query</div>
+                                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                                    <CodeMirror
+                                      value={activeReq!.graphqlQuery || ''}
+                                      style={{ height: '100%' }}
+                                      height="100%"
+                                      theme={oneDark}
+                                      extensions={[graphql()]}
+                                      onChange={(val) => handleActiveReqChange({ graphqlQuery: val })}
+                                      basicSetup={{ lineNumbers: true, tabSize: 2, autocompletion: true, foldGutter: true }}
+                                    />
+                                  </div>
+                                </div>
+                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                                  <div style={{ padding: '4px 8px', fontSize: '11px', color: 'var(--success)', background: 'rgba(0,0,0,0.2)', fontWeight: 600 }}>Variables (JSON)</div>
+                                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                                    <CodeMirror
+                                      value={activeReq!.graphqlVariables || ''}
+                                      style={{ height: '100%' }}
+                                      height="100%"
+                                      theme={oneDark}
+                                      extensions={[json()]}
+                                      onChange={(val) => handleActiveReqChange({ graphqlVariables: val })}
+                                      basicSetup={{ lineNumbers: true, tabSize: 2, autocompletion: false, foldGutter: true }}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {activeReq!.bodyType === 'form-data' && (
+                              <div className="headers-container" style={{ padding: '12px', overflowY: 'auto', height: '100%' }}>
+                                <div className="headers-grid header-row-title" style={{ gridTemplateColumns: '30px 1fr 1fr 100px 40px' }}>
+                                  <div></div>
+                                  <div>Key</div>
+                                  <div>Value / File</div>
+                                  <div>Type</div>
+                                  <div></div>
+                                </div>
+                                {activeReq!.formData.map((f) => (
+                                  <div key={f.id} className="headers-grid" style={{ gridTemplateColumns: '30px 1fr 1fr 100px 40px', alignItems: 'center', opacity: f.enabled ? 1 : 0.4 }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={f.enabled}
+                                      onChange={e => {
+                                        const next = [...activeReq!.formData];
+                                        const idx = next.findIndex(x => x.id === f.id);
+                                        next[idx].enabled = e.target.checked;
+                                        handleActiveReqChange({ formData: next });
+                                      }}
+                                    />
+                                    <input
+                                      className="text-input"
+                                      placeholder="Key"
+                                      value={f.key}
+                                      onChange={e => {
+                                        const next = [...activeReq!.formData];
+                                        next.find(x => x.id === f.id)!.key = e.target.value;
+                                        handleActiveReqChange({ formData: next });
+                                      }}
+                                    />
+                                    {f.type === 'text' ? (
+                                      <input
+                                        className="text-input"
+                                        placeholder="Value"
+                                        value={f.value}
+                                        onChange={e => {
+                                          const next = [...activeReq!.formData];
+                                          next.find(x => x.id === f.id)!.value = e.target.value;
+                                          handleActiveReqChange({ formData: next });
+                                        }}
+                                      />
+                                    ) : (
+                                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                        <button className="btn btn-secondary" style={{ fontSize: '11px', padding: '4px 8px' }} onClick={() => pickFormDataFile(f.id)}>
+                                          {f.fileInfo ? 'Trocar' : 'Escolher'}
+                                        </button>
+                                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                          {f.fileInfo?.name || 'Nenhum arquivo'}
+                                        </span>
+                                      </div>
+                                    )}
+                                    <select
+                                      value={f.type}
+                                      className="select-input"
+                                      style={{ fontSize: '11px', padding: '4px' }}
+                                      onChange={e => {
+                                        const next = [...activeReq!.formData];
+                                        const idx = next.findIndex(x => x.id === f.id);
+                                        next[idx].type = e.target.value as 'text' | 'file';
+                                        handleActiveReqChange({ formData: next });
+                                      }}
+                                    >
+                                      <option value="text">Text</option>
+                                      <option value="file">File</option>
+                                    </select>
+                                    <button className="btn-icon danger" onClick={() => {
+                                      handleActiveReqChange({ formData: activeReq!.formData.filter(fx => fx.id !== f.id) });
+                                    }}>
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                ))}
+                                <button className="btn btn-secondary" style={{ marginTop: '12px', fontSize: '11px' }} onClick={() => {
+                                  handleActiveReqChange({ formData: [...activeReq!.formData, { id: uuidv4(), key: '', value: '', type: 'text', enabled: true }] });
+                                }}>
+                                  <Plus size={14} /> Adicionar Campo
+                                </button>
+                              </div>
+                            )}
+
+                            {activeReq!.bodyType === 'urlencoded' && (
+                              <div className="headers-container" style={{ padding: '12px', overflowY: 'auto', height: '100%' }}>
+                                <div className="headers-grid header-row-title" style={{ gridTemplateColumns: '30px 1fr 1fr 40px' }}>
+                                  <div></div>
+                                  <div>Key</div>
+                                  <div>Value</div>
+                                  <div></div>
+                                </div>
+                                {/* Reusing common logic for urlencoded pairs */}
+                                {activeReq!.formData.filter(f => f.type === 'text').map((f) => (
+                                  <div key={f.id} className="headers-grid" style={{ gridTemplateColumns: '30px 1fr 1fr 40px', alignItems: 'center', opacity: f.enabled ? 1 : 0.4 }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={f.enabled}
+                                      onChange={e => {
+                                        const next = [...activeReq!.formData];
+                                        const idx = next.findIndex(x => x.id === f.id);
+                                        next[idx].enabled = e.target.checked;
+                                        handleActiveReqChange({ formData: next });
+                                      }}
+                                    />
+                                    <input
+                                      className="text-input"
+                                      placeholder="Key"
+                                      value={f.key}
+                                      onChange={e => {
+                                        const next = [...activeReq!.formData];
+                                        const idx = next.findIndex(x => x.id === f.id);
+                                        next[idx].key = e.target.value;
+                                        handleActiveReqChange({ formData: next });
+                                      }}
+                                    />
+                                    <input
+                                      className="text-input"
+                                      placeholder="Value"
+                                      value={f.value}
+                                      onChange={e => {
+                                        const next = [...activeReq!.formData];
+                                        const idx = next.findIndex(x => x.id === f.id);
+                                        next[idx].value = e.target.value;
+                                        handleActiveReqChange({ formData: next });
+                                      }}
+                                    />
+                                    <button className="btn-icon danger" onClick={() => {
+                                      handleActiveReqChange({ formData: activeReq!.formData.filter(fx => fx.id !== f.id) });
+                                    }}>
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                ))}
+                                <button className="btn btn-secondary" style={{ marginTop: '12px', fontSize: '11px' }} onClick={() => {
+                                  handleActiveReqChange({ formData: [...activeReq!.formData, { id: uuidv4(), key: '', value: '', type: 'text', enabled: true }] });
+                                }}>
+                                  <Plus size={14} /> Adicionar Par Chave/Valor
+                                </button>
+                              </div>
+                            )}
+
+                            {activeReq!.bodyType === 'binary' && (
+                              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '20px', padding: '40px' }}>
+                                <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(99, 102, 241, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  <Download size={32} className="text-accent" style={{ opacity: 0.6 }} />
+                                </div>
+                                <div style={{ textAlign: 'center' }}>
+                                  <h3 style={{ fontSize: '16px', marginBottom: '8px' }}>Corpo Binário (Binary Body)</h3>
+                                  <p style={{ color: 'var(--text-muted)', fontSize: '13px', maxWidth: '300px' }}>Selecione um arquivo para ser enviado como o corpo bruto (raw byte array) desta requisição.</p>
+                                </div>
+                                <button className="btn btn-primary" onClick={pickBinaryFile}>
+                                  <Upload size={16} /> {activeReq!.binaryFile ? 'Alterar Arquivo' : 'Selecionar Arquivo'}
+                                </button>
+                                {activeReq!.binaryFile && (
+                                  <div style={{ background: 'rgba(0,0,0,0.2)', padding: '12px 20px', borderRadius: '8px', border: '1px solid var(--border-subtle)', display: 'flex', gap: '12px', alignItems: 'center' }}>
+                                    <FileText size={18} className="text-info" />
+                                    <div style={{ textAlign: 'left' }}>
+                                      <div style={{ fontSize: '13px', fontWeight: 600 }}>{activeReq!.binaryFile.name}</div>
+                                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', wordBreak: 'break-all' }}>{activeReq!.binaryFile.path}</div>
+                                    </div>
+                                    <button className="btn-icon danger" onClick={() => handleActiveReqChange({ binaryFile: null })}>
+                                      <Trash2 size={16} />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {activeReq!.bodyType === 'none' && (
+                              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', gap: '12px' }}>
+                                <AlertTriangle size={32} style={{ opacity: 0.2 }} />
+                                <span>Esta requisição não enviará corpo (body).</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                  </>
+                )}
               </div>
 
               <div
@@ -3194,124 +3556,154 @@ getman.log("Token renovado e salvo na pasta!");`;
               <div className="bottom-panel-wrapper">
 
                 <div className="tabs bottom-tabs">
-                  <div className={`tab ${activeResTab === 'response' ? 'active' : ''}`} onClick={() => setActiveResTab('response')}>
-                    Resposta Renderizada {activeReq?.savedResponse && <span className={`status-dot ${activeReq.savedResponse.status >= 200 && activeReq.savedResponse.status < 300 ? 'dot-success' : activeReq.savedResponse.status === 0 ? 'dot-warn' : 'dot-error'}`}></span>}
-                  </div>
-                  <div className={`tab ${activeResTab === 'headers' ? 'active' : ''}`} onClick={() => setActiveResTab('headers')}>
-                    Response Headers <span className="badge">{activeReq?.savedResponse?.headers ? Object.keys(activeReq.savedResponse.headers).length : ''}</span>
-                  </div>
-                  <div className={`tab ${activeResTab === 'console' ? 'active' : ''}`} onClick={() => setActiveResTab('console')}>
+                  {activeReq?.method !== 'WS' && (
+                    <>
+                      <div className={`tab ${activeResTab === 'response' ? 'active' : ''}`} onClick={() => setActiveResTab('response')}>
+                        Resposta Renderizada {activeReq?.savedResponse && <span className={`status-dot ${activeReq.savedResponse.status >= 200 && activeReq.savedResponse.status < 300 ? 'dot-success' : activeReq.savedResponse.status === 0 ? 'dot-warn' : 'dot-error'}`}></span>}
+                      </div>
+                      <div className={`tab ${activeResTab === 'headers' ? 'active' : ''}`} onClick={() => setActiveResTab('headers')}>
+                        Response Headers <span className="badge">{activeReq?.savedResponse?.headers ? Object.keys(activeReq.savedResponse.headers).length : ''}</span>
+                      </div>
+                    </>
+                  )}
+                  <div className={`tab ${activeResTab === 'console' || activeReq?.method === 'WS' ? 'active' : ''}`} onClick={() => setActiveResTab('console')}>
                     <Terminal size={14} /> Console / Timestamps <span className="badge">{(activeReq?.savedLogs || []).length}</span>
                   </div>
                 </div>
 
-                {/* Response Panel Content */}
-                {activeResTab === 'response' && (
-                  <div className="response-panel body-content">
-                    {activeReq?.savedResponse ? (
-                      <>
-                        <div className="response-header" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', alignItems: 'center' }}>
-                          <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                            <span className={`status-badge ${activeReq.savedResponse.status >= 200 && activeReq.savedResponse.status < 300 ? 'status-success' : activeReq.savedResponse.status === 0 ? 'status-warning' : 'status-error'}`}>
-                              {activeReq.savedResponse.status === 0 ? 'ERR/000' : `${activeReq.savedResponse.status} ${activeReq.savedResponse.statusText}`}
-                            </span>
-                            <span style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: 500, fontFamily: 'var(--font-mono)' }}>Ping: <span style={{ color: 'var(--info)' }}>{activeReq.savedResponse.time} ms</span></span>
-                          </div>
-
-                          <div style={{ display: 'flex', gap: '8px' }}>
-                            <button className="btn btn-secondary" onClick={() => handleActiveReqChange({ savedResponse: null, savedLogs: [] })} style={{ padding: '6px 12px', fontSize: '12px', color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
-                              <Trash2 size={14} /> Limpar
-                            </button>
-                            <button className="btn btn-secondary" onClick={copyResponse} style={{ padding: '6px 12px', fontSize: '12px' }}>
-                              {copiedRes ? <Check size={14} className="text-success" /> : <Copy size={14} />} {copiedRes ? 'Copiado!' : 'Clipboard'}
-                            </button>
-                            <button className="btn btn-secondary" onClick={downloadResponse} style={{ padding: '6px 12px', fontSize: '12px' }} title="Salvar resposta no Disco">
-                              <Download size={14} /> Download
-                            </button>
-                          </div>
-                        </div>
-                        <div style={{ flex: 1, marginTop: '12px', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-subtle)', background: '#212121', display: 'flex', flexDirection: 'column' }}>
-                          {activeReq.savedResponse.type === 'image' ? (
-                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto', padding: '20px' }}>
-                              <img src={activeReq.savedResponse.data} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '4px', boxShadow: '0 4px 20px rgba(0,0,0,0.5)' }} alt="Response" />
-                            </div>
-                          ) : activeReq.savedResponse.type === 'pdf' ? (
-                            <iframe src={activeReq.savedResponse.data} style={{ width: '100%', height: '100%', border: 'none' }} title="PDF Preview" />
-                          ) : activeReq.savedResponse.type === 'html' ? (
-                            <iframe srcDoc={activeReq.savedResponse.data} style={{ width: '100%', height: '100%', border: 'none', background: 'white' }} title="HTML Preview" />
-                          ) : activeReq.savedResponse.type === 'binary' ? (
-                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', gap: '15px' }}>
-                              <Database size={48} style={{ opacity: 0.3 }} />
-                              <div style={{ textAlign: 'center' }}>
-                                <p style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>Arquivo Binário Detectado</p>
-                                <p style={{ fontSize: '12px' }}>Este conteúdo não pode ser renderizado como texto (Ex: ZIP, EXE, Fonte).</p>
-                              </div>
-                              <button className="btn btn-primary" onClick={downloadResponse}>
-                                <Download size={14} /> Baixar Arquivo
-                              </button>
-                            </div>
-                          ) : (
-                            <CodeMirror
-                              value={typeof activeReq.savedResponse.data === 'object' ? JSON.stringify(activeReq.savedResponse.data, null, 2) : String(activeReq.savedResponse.data || "(Nenhum conteúdo renderizável)")}
-                              height="100%"
-                              extensions={[json()]}
-                              theme={oneDark}
-                              readOnly={true}
-                              basicSetup={{
-                                lineNumbers: true,
-                                tabSize: 2,
-                                autocompletion: false,
-                                foldGutter: true
-                              }}
-                            />
-                          )}
-                        </div>
-                      </>
-                    ) : (
-                      <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.1)', flexDirection: 'column', gap: '20px' }}>
-                        <Send size={64} style={{ opacity: 0.3 }} />
-                        <span style={{ color: 'var(--text-muted)', fontSize: '16px', letterSpacing: '0.5px' }}>Tiro de sniper aguardando... Aperte "Disparo".</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {activeResTab === 'headers' && (
-                  <div className="response-panel body-content" style={{ padding: '24px' }}>
-                    {activeReq?.savedResponse?.headers ? (
-                      <div className="glass-panel" style={{ padding: 0, overflow: 'hidden' }}>
-                        <div className="headers-grid header-row-title" style={{ gridTemplateColumns: 'minmax(200px, 1fr) 2fr', background: 'rgba(0,0,0,0.2)', padding: '12px 20px' }}>
-                          <div>Header Key / Chave</div>
-                          <div>Value / Valor</div>
-                        </div>
-                        <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
-                          {Object.entries(activeReq.savedResponse.headers).map(([key, value]) => (
-                            <div key={key} className="headers-grid" style={{ gridTemplateColumns: 'minmax(200px, 1fr) 2fr', borderTop: '1px solid var(--border-subtle)', padding: '10px 20px', fontSize: '13px' }}>
-                              <div style={{ color: 'var(--text-secondary)', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{key}</div>
-                              <div style={{ color: 'var(--text-primary)', wordBreak: 'break-all', fontFamily: 'var(--font-mono)' }}>{value}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '40px' }}>
-                        Aguardando disparo da requisição para capturar headers...
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Console Panel Content */}
-                {activeResTab === 'console' && (
+                {/* WS Specific Right Panel Override */}
+                {activeReq?.method === 'WS' ? (
                   <div className="console-panel body-content">
                     {renderConsole(activeReq?.savedLogs, () => handleActiveReqChange({ savedLogs: [] }))}
                   </div>
+                ) : (
+                  <>
+                    {/* Response Panel Content */}
+                    {activeResTab === 'response' && (
+                      <div className="response-panel body-content">
+                        {activeReq?.savedResponse ? (
+                          <>
+                            <div className="response-header" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                                <span className={`status-badge ${activeReq.savedResponse.status >= 200 && activeReq.savedResponse.status < 300 ? 'status-success' : activeReq.savedResponse.status === 0 ? 'status-warning' : 'status-error'}`}>
+                                  {activeReq.savedResponse.status === 0 ? 'ERR/000' : `${activeReq.savedResponse.status} ${activeReq.savedResponse.statusText}`}
+                                </span>
+                                <span style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: 500, fontFamily: 'var(--font-mono)' }}>Ping: <span style={{ color: 'var(--info)' }}>{activeReq.savedResponse.time} ms</span></span>
+                              </div>
+
+                              <div style={{ display: 'flex', gap: '8px' }}>
+                                <button className="btn btn-secondary" onClick={() => handleActiveReqChange({ savedResponse: null, savedLogs: [] })} style={{ padding: '6px 12px', fontSize: '12px', color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
+                                  <Trash2 size={14} /> Limpar
+                                </button>
+                                <button className="btn btn-secondary" onClick={copyResponse} style={{ padding: '6px 12px', fontSize: '12px' }}>
+                                  {copiedRes ? <Check size={14} className="text-success" /> : <Copy size={14} />} {copiedRes ? 'Copiado!' : 'Clipboard'}
+                                </button>
+                                <button className="btn btn-secondary" onClick={downloadResponse} style={{ padding: '6px 12px', fontSize: '12px' }} title="Salvar resposta no Disco">
+                                  <Download size={14} /> Download
+                                </button>
+                              </div>
+                            </div>
+                            <div style={{ flex: 1, marginTop: '12px', borderRadius: '6px', border: '1px solid var(--border-subtle)', background: '#212121', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                              {activeReq.savedResponse.type === 'image' ? (
+                                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto', padding: '20px' }}>
+                                  <img src={activeReq.savedResponse.data} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '4px', boxShadow: '0 4px 20px rgba(0,0,0,0.5)' }} alt="Response" />
+                                </div>
+                              ) : activeReq.savedResponse.type === 'pdf' ? (
+                                <iframe src={activeReq.savedResponse.data} style={{ width: '100%', height: '100%', border: 'none' }} title="PDF Preview" />
+                              ) : activeReq.savedResponse.type === 'html' ? (
+                                <iframe srcDoc={activeReq.savedResponse.data} style={{ width: '100%', height: '100%', border: 'none', background: 'white' }} title="HTML Preview" />
+                              ) : activeReq.savedResponse.type === 'binary' ? (
+                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', gap: '15px' }}>
+                                  <Database size={48} style={{ opacity: 0.3 }} />
+                                  <div style={{ textAlign: 'center' }}>
+                                    <p style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-primary)' }}>Arquivo Binário Detectado</p>
+                                    <p style={{ fontSize: '12px' }}>Este conteúdo não pode ser renderizado como texto (Ex: ZIP, EXE, Fonte).</p>
+                                  </div>
+                                  <button className="btn btn-primary" onClick={downloadResponse}>
+                                    <Download size={14} /> Baixar Arquivo
+                                  </button>
+                                </div>
+                              ) : (
+                                <CodeMirror
+                                  value={typeof activeReq.savedResponse.data === 'object' ? JSON.stringify(activeReq.savedResponse.data, null, 2) : String(activeReq.savedResponse.data || "(Nenhum conteúdo renderizável)")}
+                                  extensions={[json()]}
+                                  theme={oneDark}
+                                  readOnly={true}
+                                  height="100%"
+                                  style={{ flex: 1, height: '100%' }}
+                                  basicSetup={{
+                                    lineNumbers: true,
+                                    tabSize: 2,
+                                    autocompletion: false,
+                                    foldGutter: true
+                                  }}
+                                />
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.1)', flexDirection: 'column', gap: '20px' }}>
+                            <Send size={64} style={{ opacity: 0.3 }} />
+                            <span style={{ color: 'var(--text-muted)', fontSize: '16px', letterSpacing: '0.5px' }}>Tiro de sniper aguardando... Aperte "Disparo".</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {activeResTab === 'headers' && (
+                      <div className="response-panel body-content" style={{ padding: '24px' }}>
+                        {activeReq?.savedResponse?.headers ? (
+                          <div className="glass-panel" style={{ padding: 0, overflow: 'hidden' }}>
+                            <div className="headers-grid header-row-title" style={{ gridTemplateColumns: 'minmax(200px, 1fr) 2fr', background: 'rgba(0,0,0,0.2)', padding: '12px 20px' }}>
+                              <div>Header Key / Chave</div>
+                              <div>Value / Valor</div>
+                            </div>
+                            <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
+                              {Object.entries(activeReq.savedResponse.headers).map(([key, value]) => (
+                                <div key={key} className="headers-grid" style={{ gridTemplateColumns: 'minmax(200px, 1fr) 2fr', borderTop: '1px solid var(--border-subtle)', padding: '10px 20px', fontSize: '13px' }}>
+                                  <div style={{ color: 'var(--text-secondary)', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{key}</div>
+                                  <div style={{ color: 'var(--text-primary)', wordBreak: 'break-all', fontFamily: 'var(--font-mono)' }}>{value}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '40px' }}>
+                            Aguardando disparo da requisição para capturar headers...
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Console Panel Content */}
+                    {activeResTab === 'console' && (
+                      <div className="console-panel body-content">
+                        {renderConsole(activeReq?.savedLogs, () => handleActiveReqChange({ savedLogs: [] }))}
+                      </div>
+                    )}
+                  </>
                 )}
               </div> {/* End of bottom-panel-wrapper */}
             </div> {/* End of editor-layout */}
           </>
         )}
       </main>
-    </div>
+
+      {/* Loading Overlay */}
+      {showLoadingOverlay && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(3px)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          color: 'var(--text-primary)', zIndex: 9999
+        }}>
+          <div style={{ fontSize: '48px', animation: 'spin 1.5s linear infinite', marginBottom: '16px' }}><Globe /></div>
+          <div style={{ fontSize: '18px', fontWeight: 600, letterSpacing: '1px' }}>Processando requisição...</div>
+          <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '8px', marginBottom: '24px' }}>Isso pode levar alguns segundos, ou o timeout será atingido.</div>
+          <button className="btn btn-danger" style={{ padding: '8px 24px', fontSize: '14px' }} onClick={cancelReq}>Cancelar Requisição</button>
+        </div>
+      )}
+
+    </div >
   );
 }

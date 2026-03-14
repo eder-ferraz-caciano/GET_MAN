@@ -1,0 +1,24 @@
+{
+  "bumpFiles": [
+    {
+      "filename": "package.json",
+      "type": "json"
+    },
+    {
+      "filename": "src-tauri/tauri.conf.json",
+      "type": "json"
+    }
+  ],
+  "types": [
+    { "type": "feat", "section": "✨ Features | Novidades" },
+    { "type": "fix", "section": "🐛 Bug Fixes | Correções" },
+    { "type": "chore", "section": "⚙️ Housekeeping | Manutenção" },
+    { "type": "docs", "section": "📚 Documentation | Documentação" },
+    { "type": "style", "section": "💄 Styles | Estilos" },
+    { "type": "refactor", "section": "♻️ Refactor | Refatoração" },
+    { "type": "perf", "section": "⚡ Performance | Desempenho" },
+    { "type": "test", "section": "✅ Tests | Testes" }
+  ],
+  "commitAll": true,
+  "releaseCommitMessageFormat": "chore(release): {{currentTag}} [skip ci]"
+}
