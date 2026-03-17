@@ -1,4 +1,4 @@
-describe('GET MAN - Core Stability & Reliability E2E', () => {
+describe('AuraFetch - Core Stability & Reliability E2E', () => {
     const POSTMAN_ECHO = 'https://postman-echo.com';
 
     beforeEach(() => {

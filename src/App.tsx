@@ -214,10 +214,10 @@ const initialCollection: CollectionNode[] = [
 
 // Migration helper: convert legacy workspace format to new tree format
 const migrateWorkspacesToTreeFormat = (): CollectionNode[] | null => {
-  const savedV2 = localStorage.getItem('getman_collection_v2');
+  const savedV2 = localStorage.getItem('aurafetch_collection_v2');
   if (savedV2) return JSON.parse(savedV2);
 
-  const savedOldWs = localStorage.getItem('getman_workspaces');
+  const savedOldWs = localStorage.getItem('aurafetch_workspaces');
   if (savedOldWs) {
     const oldWorkspaces: LegacyWorkspace[] = JSON.parse(savedOldWs);
     return oldWorkspaces.map(ws => ({
@@ -235,9 +235,9 @@ const migrateWorkspacesToTreeFormat = (): CollectionNode[] | null => {
   }
 
   // Try old single-collection format
-  const oldCol = localStorage.getItem('getman_collection');
-  const oldEnvs = localStorage.getItem('getman_envs');
-  const oldActiveEnv = localStorage.getItem('getman_env_active');
+  const oldCol = localStorage.getItem('aurafetch_collection');
+  const oldEnvs = localStorage.getItem('aurafetch_envs');
+  const oldActiveEnv = localStorage.getItem('aurafetch_env_active');
   if (oldCol) {
     return [{
       id: 'ws_default',
@@ -366,7 +366,7 @@ export default function App() {
   const [sidebarTab, setSidebarTab] = useState<'collection' | 'history'>('collection');
   const [treeSearchQuery, setTreeSearchQuery] = useState('');
   const [globalVariables, setGlobalVariables] = useState<EnvVar[]>(() => {
-    const saved = localStorage.getItem('getman_globals');
+    const saved = localStorage.getItem('aurafetch_globals');
     return saved ? JSON.parse(saved) : [];
   });
 
@@ -651,8 +651,8 @@ export default function App() {
 
   // Persist State
   useEffect(() => {
-    localStorage.setItem('getman_collection_v2', JSON.stringify(collection));
-    localStorage.setItem('getman_globals', JSON.stringify(globalVariables));
+    localStorage.setItem('aurafetch_collection_v2', JSON.stringify(collection));
+    localStorage.setItem('aurafetch_globals', JSON.stringify(globalVariables));
   }, [collection, globalVariables]);
 
   // Loop Engine (Automation)
@@ -822,8 +822,8 @@ const res = await tauriFetch("{{base_url}}/auth/login", {
   body: JSON.stringify({ email: "admin@empresa.com", password: "senha123" })
 });
 const data = await res.json();
-getman.setEnv("token_acesso", data.token);
-getman.log("Token renovado e salvo na pasta!");`;
+aurafetch.setEnv("token_acesso", data.token);
+aurafetch.log("Token renovado e salvo na pasta!");`;
 
     const envDevId = uuidv4();
     const envProdId = uuidv4();
@@ -1675,10 +1675,10 @@ getman.log("Token renovado e salvo na pasta!");`;
     try {
       const scriptBody = node.folderConfig.setupScript;
 
-      const getmanCtx = {
+      const aurafetchCtx = {
         setEnv: (key: string, value: any) => {
           if (value === undefined || value === null) {
-            addLog('error', `⚠️ [getman] Tentativa de salvar '${key}' com valor nulo ou indefinido! Verifique a resposta da API.`);
+            addLog('error', `⚠️ [aurafetch] Tentativa de salvar '${key}' com valor nulo ou indefinido! Verifique a resposta da API.`);
             return;
           }
           const finalVal = String(value);
@@ -1700,19 +1700,19 @@ getman.log("Token renovado e salvo na pasta!");`;
                 }
               };
             });
-            addLog('success', `🧩 [getman] Variável de Ambiente '${key}' salva! (Valor: ${finalVal.substring(0, 10)}...)`);
+            addLog('success', `🧩 [aurafetch] Variável de Ambiente '${key}' salva! (Valor: ${finalVal.substring(0, 10)}...)`);
           } else {
             setGlobalVariables(globals => {
               const exists = globals.find(v => v.key === key);
               if (exists) return globals.map(v => v.key === key ? { ...v, value: finalVal } : v);
               return [...globals, { id: uuidv4(), key, value: finalVal }];
             });
-            addLog('success', `🧩 [getman] Variável Global '${key}' salva!`);
+            addLog('success', `🧩 [aurafetch] Variável Global '${key}' salva!`);
           }
         },
         setVar: (key: string, value: any) => {
           if (value === undefined || value === null) {
-            addLog('error', `⚠️ [getman] Tentativa de salvar '${key}' na PASTA com valor nulo ou indefinido!`);
+            addLog('error', `⚠️ [aurafetch] Tentativa de salvar '${key}' na PASTA com valor nulo ou indefinido!`);
             return;
           }
           const finalVal = String(value);
@@ -1728,9 +1728,9 @@ getman.log("Token renovado e salvo na pasta!");`;
               folderConfig: { ...(folder.folderConfig || { auth: defaultFolderAuth, variables: [] }), variables: newVars }
             };
           });
-          addLog('success', `🧩 [getman] Variável da Pasta '${key}' setada para: ${finalVal.substring(0, 10)}...`);
+          addLog('success', `🧩 [aurafetch] Variável da Pasta '${key}' setada para: ${finalVal.substring(0, 10)}...`);
         },
-        log: (msg: any) => addLog('log', `📝 [getman] ${typeof msg === 'object' ? JSON.stringify(msg, null, 2) : msg}`)
+        log: (msg: any) => addLog('log', `📝 [aurafetch] ${typeof msg === 'object' ? JSON.stringify(msg, null, 2) : msg}`)
       };
 
       const customFetch = async (url: string, options?: RequestInit) => {
@@ -1776,9 +1776,9 @@ getman.log("Token renovado e salvo na pasta!");`;
       };
 
       const AsyncFunction = Object.getPrototypeOf(async function () { }).constructor;
-      const fn = new AsyncFunction('getman', 'fetch', 'tauriFetch', scriptBody);
+      const fn = new AsyncFunction('aurafetch', 'fetch', 'tauriFetch', scriptBody);
 
-      await fn(getmanCtx, customFetch, customFetch);
+      await fn(aurafetchCtx, customFetch, customFetch);
 
       addLog('success', `✅ Script finalizado! Variáveis injetadas com sucesso.`);
     } catch (err: any) {
@@ -1797,8 +1797,8 @@ getman.log("Token renovado e salvo na pasta!");`;
       const content = JSON.stringify(db, null, 2);
 
       const filePath = await tauriSave({
-        filters: [{ name: 'GetMan Workspace', extensions: ['json'] }],
-        defaultPath: 'getman_workspace.json'
+        filters: [{ name: 'AuraFetch Workspace', extensions: ['json'] }],
+        defaultPath: 'aurafetch_workspace.json'
       });
 
       if (filePath) {
@@ -2163,7 +2163,7 @@ getman.log("Token renovado e salvo na pasta!");`;
           onDragStart={(e) => {
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/plain', node.id);
-            e.dataTransfer.setData('text/uri-list', 'http://getman.io/' + node.id);
+            e.dataTransfer.setData('text/uri-list', 'http://aurafetch.io/' + node.id);
             draggedNodeIdRef.current = node.id;
             document.body.classList.add('dragging-active');
             e.currentTarget.classList.add('is-dragging');
@@ -2504,7 +2504,7 @@ getman.log("Token renovado e salvo na pasta!");`;
         <div style={{ padding: '20px 16px 14px 16px', borderBottom: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.1)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
             <h2 className="app-title" onClick={() => setActiveNodeId(null)} style={{ cursor: 'pointer', margin: 0 }}>
-              <span className="highlight">GET</span> MAN
+              <span className="highlight">Aura</span>Fetch
             </h2>
           </div>
 
@@ -2645,11 +2645,8 @@ getman.log("Token renovado e salvo na pasta!");`;
         {!activeNode ? (
           /* WELCOME SCREEN */
           <div className="fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
-            <div style={{ position: 'relative', marginBottom: '24px' }}>
-              <Terminal size={64} style={{ opacity: 0.1 }} />
-              <Layers size={32} className="text-accent" style={{ position: 'absolute', bottom: -10, right: -10, opacity: 0.5 }} />
-            </div>
-            <h2 style={{ color: 'var(--text-primary)', marginBottom: '8px', letterSpacing: '-0.5px' }}>GET MAN</h2>
+            <img src="/aurafetch_logo.png" alt="AuraFetch Logo" width={80} style={{ borderRadius: '16px', marginBottom: '16px', boxShadow: '0 8px 32px rgba(0,0,0,0.3)' }} />
+            <h2 style={{ color: 'var(--text-primary)', marginBottom: '8px', letterSpacing: '-0.5px' }}>AuraFetch</h2>
             <p style={{ maxWidth: '400px', textAlign: 'center', lineHeight: 1.6, marginBottom: '32px' }}>
               Selecione uma requisição no menu lateral ou crie uma nova para começar.
             </p>
@@ -2996,7 +2993,7 @@ getman.log("Token renovado e salvo na pasta!");`;
                   <button
                     className="btn btn-secondary"
                     onClick={() => handleActiveFolderConfigChange({
-                      setupScript: '// Exemplo prático de Login Auth:\n\nconst res = await fetch("{{base_url}}/auth/login", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify({ email: "admin", pass: "123" })\n});\n\nconst data = await res.json();\n\n// Debug: Veja no console abaixo o que o servidor mandou\ngetman.log(data);\n\n// Guarda no Ambiente ou Global\ngetman.setEnv("token_acesso", data.token);\ngetman.log("Token renovado com sucesso!");'
+                      setupScript: '// Exemplo prático de Login Auth:\n\nconst res = await fetch("{{base_url}}/auth/login", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify({ email: "admin", pass: "123" })\n});\n\nconst data = await res.json();\n\n// Debug: Veja no console abaixo o que o servidor mandou\naurafetch.log(data);\n\n// Guarda no Ambiente ou Global\naurafetch.setEnv("token_acesso", data.token);\naurafetch.log("Token renovado com sucesso!");'
                     })}
                   >
                     <FileText size={14} /> Inserir Exemplo
@@ -3008,7 +3005,7 @@ getman.log("Token renovado e salvo na pasta!");`;
               </div>
               <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '12px', lineHeight: 1.5 }}>
                 Faça login e guarde o Token no Ambiente ou na Pasta! <br />
-                Expostas: <code style={{ color: 'var(--accent-primary)' }}>fetch()</code>, <code style={{ color: 'var(--success)' }}>getman.setEnv(k, v)</code>, <code style={{ color: 'var(--warning)' }}>getman.setVar(k, v)</code>.
+                Expostas: <code style={{ color: 'var(--accent-primary)' }}>fetch()</code>, <code style={{ color: 'var(--success)' }}>aurafetch.setEnv(k, v)</code>, <code style={{ color: 'var(--warning)' }}>aurafetch.setVar(k, v)</code>.
               </p>
               <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border-subtle)', minHeight: '220px' }}>
                 <CodeMirror

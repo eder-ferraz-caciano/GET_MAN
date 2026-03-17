@@ -1,4 +1,4 @@
-describe('GET MAN - Queries & Params Synchronization E2E', () => {
+describe('AuraFetch - Queries & Params Synchronization E2E', () => {
     const POSTMAN_ECHO = 'https://postman-echo.com';
 
     beforeEach(() => {

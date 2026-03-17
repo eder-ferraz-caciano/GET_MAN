@@ -1,4 +1,4 @@
-describe('GET MAN - Premium Features E2E', () => {
+describe('AuraFetch - Premium Features E2E', () => {
     const POSTMAN_ECHO = 'https://postman-echo.com';
 
     beforeEach(() => {
@@ -113,7 +113,7 @@ describe('GET MAN - Premium Features E2E', () => {
         cy.get('.sidebar-tree-container').contains('Meu Servidor/Projeto', { timeout: 10000 }).click({ force: true });
 
         cy.contains('h3', 'Script JS').should('be.visible');
-        cy.get('.cm-content').last().focus().clear().type('getman.log("CY_FOLDER_OK");', { parseSpecialCharSequences: false });
+        cy.get('.cm-content').last().focus().clear().type('aurafetch.log("CY_FOLDER_OK");', { parseSpecialCharSequences: false });
         cy.contains('button', 'Executar Script Manualmente').click();
 
         // O console da pasta usa classe .console-panel (não .response-panel!)

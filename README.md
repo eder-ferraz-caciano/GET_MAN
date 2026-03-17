@@ -1,32 +1,32 @@
 <div align="center">
-  <img src="public/get_man_logo.png" alt="GET MAN Logo" width="100" height="100" style="border-radius: 20px;">
-  <h1>🚀 GET MAN</h1>
+  <img src="public/aurafetch_logo.png" alt="AuraFetch Logo" width="100" height="100" style="border-radius: 20px;">
+  <h1>🚀 AuraFetch</h1>
   <p><b>The Modern, Lightning-Fast API Client for Desktop</b></p>
   <p>A lightweight alternative to Postman & Insomnia — built with Tauri, React & TypeScript.</p>
 
   <br/>
 
-  [![Release](https://img.shields.io/github/v/release/eder-ferraz-caciano/GET_MAN?color=818cf8&style=for-the-badge&logo=github)](https://github.com/eder-ferraz-caciano/GET_MAN/releases/latest)
+  [![Release](https://img.shields.io/github/v/release/eder-ferraz-caciano/AuraFetch?color=818cf8&style=for-the-badge&logo=github)](https://github.com/eder-ferraz-caciano/AuraFetch/releases/latest)
   [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
-  [![Stars](https://img.shields.io/github/stars/eder-ferraz-caciano/GET_MAN?color=f59e0b&style=for-the-badge&logo=github)](https://github.com/eder-ferraz-caciano/GET_MAN/stargazers)
-  [![Downloads](https://img.shields.io/github/downloads/eder-ferraz-caciano/GET_MAN/total?color=10b981&style=for-the-badge)](https://github.com/eder-ferraz-caciano/GET_MAN/releases)
+  [![Stars](https://img.shields.io/github/stars/eder-ferraz-caciano/AuraFetch?color=f59e0b&style=for-the-badge&logo=github)](https://github.com/eder-ferraz-caciano/AuraFetch/stargazers)
+  [![Downloads](https://img.shields.io/github/downloads/eder-ferraz-caciano/AuraFetch/total?color=10b981&style=for-the-badge)](https://github.com/eder-ferraz-caciano/AuraFetch/releases)
   [![Tauri](https://img.shields.io/badge/Tauri-2.x-ffc131?style=for-the-badge&logo=tauri&logoColor=white)](https://tauri.app)
   [![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=white)](https://react.dev)
 
   <br/><br/>
 
-  <img src="public/hero-banner.png" alt="GET MAN — Modern API Client" width="85%" style="border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.5);">
+  <img src="public/hero-banner.png" alt="AuraFetch — Modern API Client" width="85%" style="border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.5);">
 
   <br/><br/>
 </div>
 
 ---
 
-## 💡 Why GET MAN?
+## 💡 Why AuraFetch?
 
-Most API clients are **heavy Electron apps** that consume 500MB+ of RAM just to send a GET request. GET MAN is different:
+Most API clients are **heavy Electron apps** that consume 500MB+ of RAM just to send a GET request. AuraFetch is different:
 
-| | GET MAN | Postman | Insomnia |
+| | AuraFetch | Postman | Insomnia |
 |---|:---:|:---:|:---:|
 | **RAM Usage** | ~50MB | ~500MB | ~300MB |
 | **Startup Time** | <1s | 5-10s | 3-5s |
@@ -35,7 +35,7 @@ Most API clients are **heavy Electron apps** that consume 500MB+ of RAM just to 
 | **Open Source** | ✅ | ❌ | Partially |
 | **Native Desktop** | ✅ Rust | ❌ Electron | ❌ Electron |
 
-> **GET MAN is built with Tauri (Rust)** — no Electron, no Chromium bundled, no bloat. It's a native desktop application that feels like a web app.
+> **AuraFetch is built with Tauri (Rust)** — no Electron, no Chromium bundled, no bloat. It's a native desktop application that feels like a web app.
 
 ---
 
@@ -51,7 +51,7 @@ Most API clients are **heavy Electron apps** that consume 500MB+ of RAM just to 
 
 ### 🎯 Professional
 - 🌍 **Environment Variables** — Create environments (DEV, STAGING, PROD) with `{{variables}}` interpolation in URLs, headers, and body
-- � **Pre-Request Scripts (JS)** — Write vanilla JavaScript per folder to automate login flows, generate tokens, and inject variables with `getman.setEnv()`
+- � **Pre-Request Scripts (JS)** — Write vanilla JavaScript per folder to automate login flows, generate tokens, and inject variables with `aurafetch.setEnv()`
 - 🎨 **CodeMirror Editor** — Full syntax highlighting with OneDark theme for JSON/JS editing
 - 🕵️ **Console & Timestamps** — Deep debugging panel that traces every request lifecycle
 - 📋 **Response Inspector** — Rendered view, Response Headers, Console logs — all in tabbed panels
@@ -69,7 +69,7 @@ Most API clients are **heavy Electron apps** that consume 500MB+ of RAM just to 
 
 <div align="center">
 
-### ⬇️ [Download Latest Release (Windows .exe)](https://github.com/eder-ferraz-caciano/GET_MAN/releases/latest)
+### ⬇️ [Download Latest Release (Windows .exe)](https://github.com/eder-ferraz-caciano/AuraFetch/releases/latest)
 
 *macOS and Linux builds coming soon!*
 
@@ -89,8 +89,8 @@ Most API clients are **heavy Electron apps** that consume 500MB+ of RAM just to 
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/eder-ferraz-caciano/GET_MAN.git
-cd GET_MAN
+git clone https://github.com/eder-ferraz-caciano/AuraFetch.git
+cd AuraFetch
 
 # 2. Install dependencies
 yarn install
@@ -111,7 +111,7 @@ src-tauri/target/release/bundle/
 
 ## 🧪 Testing
 
-GET MAN includes a comprehensive Cypress E2E test suite covering all professional features:
+AuraFetch includes a comprehensive Cypress E2E test suite covering all professional features:
 
 ```bash
 # Run all E2E tests (headless)
@@ -152,8 +152,8 @@ yarn cypress:open
 - [x] Response rendering (JSON, HTML, Images, PDF, Binary)
 - [x] Export / Import workspace
 - [x] Cypress E2E test suite
-- [ ] WebSocket support
-- [ ] GraphQL support
+- [x] WebSocket support
+- [x] GraphQL support
 - [ ] Team collaboration & cloud sync
 - [ ] Plugin system
 - [ ] macOS & Linux builds
@@ -163,7 +163,7 @@ yarn cypress:open
 
 ## 🤝 Contributing
 
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/eder-ferraz-caciano/GET_MAN/issues).
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/eder-ferraz-caciano/AuraFetch/issues).
 
 1. Fork the project
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
@@ -182,5 +182,5 @@ This project is [MIT](LICENSE) licensed.
 <div align="center">
   <br/>
   <p>Built with ❤️ by <a href="https://github.com/eder-ferraz-caciano">Eder Ferraz Caciano</a></p>
-  <p><sub>If you find GET MAN useful, consider giving it a ⭐ on GitHub!</sub></p>
+  <p><sub>If you find AuraFetch useful, consider giving it a ⭐ on GitHub!</sub></p>
 </div>

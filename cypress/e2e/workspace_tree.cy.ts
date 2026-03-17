@@ -1,5 +1,5 @@
 /**
- * GET MAN – Workspace, Tree & Environment E2E Tests
+ * AuraFetch – Workspace, Tree & Environment E2E Tests
  *
  * Covers:
  *  1. Creating multiple workspaces
@@ -11,7 +11,7 @@
  *  7. Query Params, Path Params (Params URL tab), and Queries tab synchronization
  */
 
-describe('GET MAN – Workspace & Tree E2E', () => {
+describe('AuraFetch – Workspace & Tree E2E', () => {
 
     // ─── Helper: click the ⋮ menu on a tree node, then an action ───
     const openNodeMenu = (nodeName: string) => {
@@ -381,7 +381,7 @@ describe('GET MAN – Workspace & Tree E2E', () => {
 // ═══════════════════════════════════════════════════════════════════
 //  SEPARATE SUITE: QUERY PARAMS, PATH PARAMS, QUERIES
 // ═══════════════════════════════════════════════════════════════════
-describe('GET MAN – Params, Queries & URL Synchronization', () => {
+describe('AuraFetch – Params, Queries & URL Synchronization', () => {
     const POSTMAN_ECHO = 'https://postman-echo.com';
 
     beforeEach(() => {
