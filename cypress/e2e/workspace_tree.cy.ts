@@ -138,8 +138,8 @@ describe('AuraFetch – Workspace & Tree E2E', () => {
 
         it('Deve criar pasta e req via botões no header do workspace config', () => {
             clickTreeNode('Workspace');
-            // Click "+ Requisição" in the workspace config header
-            cy.get('.main-content').contains('button', 'Requisição').click({ force: true });
+            // Click "HTTP" in the workspace config header (was previously Requisição)
+            cy.get('.main-content').contains('button', 'HTTP').click({ force: true });
             cy.get('.sidebar-tree-container').contains('Nova Rota').should('exist');
 
             // Go back to workspace
@@ -406,7 +406,7 @@ describe('AuraFetch – Params, Queries & URL Synchronization', () => {
         cy.get('input[placeholder="Valor"]').last().clear().type('cypress_test', { parseSpecialCharSequences: false });
 
         // URL should now contain ?search=cypress_test
-        cy.get('input[placeholder="{{base_url}}/v1/users"]')
+        cy.get('input[placeholder="{{base_url}}/api/..."]')
             .invoke('val')
             .should('include', 'search=cypress_test');
     });
@@ -417,7 +417,7 @@ describe('AuraFetch – Params, Queries & URL Synchronization', () => {
     it('Deve preencher a tabela de Queries ao digitar na URL', () => {
         cy.get('.tab').contains('Queries').click();
 
-        cy.get('input[placeholder="{{base_url}}/v1/users"]')
+        cy.get('input[placeholder="{{base_url}}/api/..."]')
             .clear()
             .type(`${POSTMAN_ECHO}/get?page=1&limit=50`, { parseSpecialCharSequences: false });
 
@@ -429,7 +429,7 @@ describe('AuraFetch – Params, Queries & URL Synchronization', () => {
     // 3. PATH PARAMS DETECTION
     // ────────────────────────────────────────────
     it('Deve detectar Path Params (:id) na URL e criar na tabela', () => {
-        cy.get('input[placeholder="{{base_url}}/v1/users"]')
+        cy.get('input[placeholder="{{base_url}}/api/..."]')
             .clear()
             .type(`${POSTMAN_ECHO}/users/:userId/posts/:postId`, { parseSpecialCharSequences: false });
 
@@ -446,25 +446,26 @@ describe('AuraFetch – Params, Queries & URL Synchronization', () => {
     // 4. PATH PARAMS REPLACEMENT IN REQUEST
     // ────────────────────────────────────────────
     it('Deve substituir :id no Path Param ao fazer disparo', () => {
-        cy.get('input[placeholder="{{base_url}}/v1/users"]')
+        cy.get('input[placeholder="{{base_url}}/api/..."]')
             .clear()
             .type(`${POSTMAN_ECHO}/get`, { parseSpecialCharSequences: false });
 
         // Add :id path param by editing the URL
-        cy.get('input[placeholder="{{base_url}}/v1/users"]')
+        cy.get('input[placeholder="{{base_url}}/api/..."]')
             .clear()
-            .type(`${POSTMAN_ECHO}/get?user_id=:id`, { parseSpecialCharSequences: false });
+            .type(`${POSTMAN_ECHO}/get/user/:id`, { parseSpecialCharSequences: false });
 
         cy.get('.tab').contains('Params (URL)').click();
 
         // Fill in value for :id
         cy.get('input[placeholder="Valor"]').last().type('42', { parseSpecialCharSequences: false });
 
-        // Switch to Queries tab — the query param user_id should contain the value
+        // Switch to Queries tab to trigger any query parsing (should be empty for path params but keeps test structure)
         cy.get('.tab').contains('Queries').click();
 
-        // Verify query parsing happened
-        cy.get('input[placeholder="Chave"]').should('have.length.at.least', 1);
+        // Verify path param parsing happened (go back to Params tab to check or check path params table if visible)
+        cy.get('.tab').contains('Params (URL)').click();
+        cy.get('input[placeholder="Chave"]').should('have.length.at.least', 1).and('have.value', 'id');
     });
 
     // ────────────────────────────────────────────
@@ -484,7 +485,7 @@ describe('AuraFetch – Params, Queries & URL Synchronization', () => {
         cy.get('input[placeholder="Valor"]').last().clear().type('qux', { parseSpecialCharSequences: false });
 
         // URL should contain both
-        cy.get('input[placeholder="{{base_url}}/v1/users"]')
+        cy.get('input[placeholder="{{base_url}}/api/..."]')
             .invoke('val')
             .should('include', 'foo=bar')
             .and('include', 'baz=qux');
@@ -494,7 +495,7 @@ describe('AuraFetch – Params, Queries & URL Synchronization', () => {
     // 6. QUERY PARAMS WITH REAL ECHO
     // ────────────────────────────────────────────
     it('Deve enviar Query Params e receber echo correto', () => {
-        cy.get('input[placeholder="{{base_url}}/v1/users"]')
+        cy.get('input[placeholder="{{base_url}}/api/..."]')
             .clear()
             .type(`${POSTMAN_ECHO}/get?framework=cypress&lang=ts`, { parseSpecialCharSequences: false });
 
@@ -513,7 +514,7 @@ describe('AuraFetch – Params, Queries & URL Synchronization', () => {
         cy.get('input[placeholder="Ex: Content-Type"]').last().clear().type('X-Cypress-Test', { parseSpecialCharSequences: false });
         cy.get('input[placeholder*="Ex: application/json"]').last().clear().type('e2e-value', { parseSpecialCharSequences: false });
 
-        cy.get('input[placeholder="{{base_url}}/v1/users"]')
+        cy.get('input[placeholder="{{base_url}}/api/..."]')
             .clear()
             .type(`${POSTMAN_ECHO}/headers`, { parseSpecialCharSequences: false });
 
@@ -542,7 +543,7 @@ describe('AuraFetch – Params, Queries & URL Synchronization', () => {
         cy.get('.cm-content').first().focus().clear()
             .type('{"test": "cypress_body"}', { parseSpecialCharSequences: false });
 
-        cy.get('input[placeholder="{{base_url}}/v1/users"]')
+        cy.get('input[placeholder="{{base_url}}/api/..."]')
             .clear()
             .type(`${POSTMAN_ECHO}/post`, { parseSpecialCharSequences: false });
 

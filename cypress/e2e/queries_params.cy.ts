@@ -14,7 +14,7 @@ describe('AuraFetch - Queries & Params Synchronization E2E', () => {
     // ────────────────────────────────────────────
     it('Deve sincronizar a URL ao adicionar Query Params na tabela', () => {
         // Primeiro definir a URL base
-        cy.get('input[placeholder="{{base_url}}/v1/users"]')
+        cy.get('input[placeholder="{{base_url}}/api/..."]')
             .clear()
             .type(`${POSTMAN_ECHO}/get`, { parseSpecialCharSequences: false });
 
@@ -27,7 +27,7 @@ describe('AuraFetch - Queries & Params Synchronization E2E', () => {
         cy.get('input[placeholder="Valor"]').last().clear().type('valor_abc', { parseSpecialCharSequences: false });
 
         // Verificar se a URL foi atualizada (deve conter chave=valor)
-        cy.get('input[placeholder="{{base_url}}/v1/users"]')
+        cy.get('input[placeholder="{{base_url}}/api/..."]')
             .invoke('val')
             .should('include', 'teste_query=valor_abc');
     });
@@ -36,7 +36,7 @@ describe('AuraFetch - Queries & Params Synchronization E2E', () => {
         cy.get('.tab').contains('Queries').click();
 
         // Digitar diretamente na barra de URL
-        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/get?q=tauri&lang=pt`, { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="{{base_url}}/api/..."]').clear().type(`${POSTMAN_ECHO}/get?q=tauri&lang=pt`, { parseSpecialCharSequences: false });
 
         // Verificar se a tabela de Queries agora tem os itens nos inputs
         // O h3 deve conter "Query Parameters"
@@ -50,7 +50,7 @@ describe('AuraFetch - Queries & Params Synchronization E2E', () => {
     // 2. PATH PARAMS DETECTION
     // ────────────────────────────────────────────
     it('Deve detectar Path Params (:id) na URL e criar na tabela', () => {
-        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/users/:id/details`, { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="{{base_url}}/api/..."]').clear().type(`${POSTMAN_ECHO}/users/:id/details`, { parseSpecialCharSequences: false });
 
         cy.get('.tab').contains('Params (URL)').click();
 

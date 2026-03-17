@@ -14,9 +14,33 @@ import { fetch as tauriHttpFetch } from '@tauri-apps/plugin-http';
 import WebSocket from '@tauri-apps/plugin-websocket';
 import { save as tauriSave, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import { writeFile as tauriWriteFile, readFile as tauriReadFile } from '@tauri-apps/plugin-fs';
+import { isTauri } from '@tauri-apps/api/core';
+
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '40px', color: 'var(--text-primary)', textAlign: 'center' }}>
+          <h2>Algo deu errado (Erro Renderização).</h2>
+          <p style={{ color: 'var(--danger)' }}>{this.state.error?.message}</p>
+          <button className="btn btn-primary" onClick={() => window.location.reload()}>Recarregar App</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 
 const safeFetch = async (url: string, init?: RequestInit) => {
-  if ((window as any).__TAURI_INTERNALS__) {
+  if (isTauri()) {
     return tauriHttpFetch(url, init);
   }
   return fetch(url, init);
@@ -1615,16 +1639,23 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
 
     } catch (err: any) {
       const timeMs = Date.now() - startTime;
-      let errData = err.message || err.toString();
+      let errData = "Erro Desconhecido";
+      let errName = "Network Error";
       
-      if (err.name === 'AbortError') {
-        errData = err.message.includes('Timeout') ? 'Timeout excedido (Cancelado)' : 'Requisição abortada pelo usuário';
+      if (err) {
+        errData = err.message || err.toString?.() || JSON.stringify(err) || "Erro Desconhecido";
+        if (err.name === 'AbortError') {
+           errName = 'Abortado';
+           errData = typeof err.message === 'string' && err.message.includes('Timeout') ? 'Timeout excedido (Cancelado)' : 'Requisição abortada pelo usuário';
+        } else if (err.name) {
+           errName = err.name;
+        }
       }
 
       handleActiveReqChange({
         savedResponse: {
           status: 0,
-          statusText: err.name === 'AbortError' ? 'Abortado' : 'Network Error',
+          statusText: errName,
           data: errData,
           time: timeMs
         }
@@ -2642,6 +2673,7 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
 
       {/* Main Content */}
       <main className="main-content">
+        <ErrorBoundary>
         {!activeNode ? (
           /* WELCOME SCREEN */
           <div className="fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
@@ -3684,6 +3716,7 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
             </div> {/* End of editor-layout */}
           </>
         )}
+        </ErrorBoundary>
       </main>
 
       {/* Loading Overlay */}

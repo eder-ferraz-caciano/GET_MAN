@@ -181,6 +181,6 @@ This project is [MIT](LICENSE) licensed.
 
 <div align="center">
   <br/>
-  <p>Built with ❤️ by <a href="https://github.com/eder-ferraz-caciano">Eder Ferraz Caciano</a></p>
+  <p>By <a href="https://github.com/eder-ferraz-caciano">Eder Ferraz Caciano</a></p>
   <p><sub>If you find AuraFetch useful, consider giving it a ⭐ on GitHub!</sub></p>
 </div>

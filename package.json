@@ -48,7 +48,11 @@
     "axios",
     "cors",
     "json-viewer",
-    "request-builder"
+    "request-builder",
+    "websocket",
+    "websocket-client",
+    "websocket-tester",
+    "ws"
   ],
   "type": "module",
   "scripts": {

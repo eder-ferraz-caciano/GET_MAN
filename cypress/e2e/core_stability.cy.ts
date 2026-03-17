@@ -40,7 +40,7 @@ describe('AuraFetch - Core Stability & Reliability E2E', () => {
     it('Deve gerenciar o Histórico de requisições', () => {
         // Selecionar uma requisição e disparar com URL única
         cy.get('.sidebar-tree-container').contains('Listar Dados').click({ force: true });
-        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/get?test=history`, { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="{{base_url}}/api/..."]').clear().type(`${POSTMAN_ECHO}/get?test=history`, { parseSpecialCharSequences: false });
         cy.contains('button', 'Fazer Disparo').click({ force: true });
         cy.get('.status-badge', { timeout: 25000 }).should('be.visible');
 
@@ -50,7 +50,7 @@ describe('AuraFetch - Core Stability & Reliability E2E', () => {
 
         // Clicar no histórico deve carregar a URL no input principal
         cy.get('.history-card').first().click();
-        cy.get('input[placeholder="{{base_url}}/v1/users"]').should('have.value', `${POSTMAN_ECHO}/get?test=history`);
+        cy.get('input[placeholder="{{base_url}}/api/..."]').should('have.value', `${POSTMAN_ECHO}/get?test=history`);
     });
 
     // ────────────────────────────────────────────

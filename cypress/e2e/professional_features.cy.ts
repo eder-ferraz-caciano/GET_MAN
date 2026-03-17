@@ -21,7 +21,7 @@ describe('AuraFetch - Premium Features E2E', () => {
         cy.get('input[placeholder="Ex: Content-Type"]').last().clear().type('X-Test-Api', { parseSpecialCharSequences: false });
         cy.get('input[placeholder*="Ex: application/json"]').last().clear().type('Antigravity-Value', { parseSpecialCharSequences: false });
 
-        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/headers`, { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="{{base_url}}/api/..."]').clear().type(`${POSTMAN_ECHO}/headers`, { parseSpecialCharSequences: false });
         cy.contains('button', 'Fazer Disparo').click({ force: true });
 
         // A resposta fica em div.response-panel.body-content
@@ -39,7 +39,7 @@ describe('AuraFetch - Premium Features E2E', () => {
         // O CodeMirror do body está dentro de um div com background #282c34, não tem classe customizada
         // Primeiro .cm-content na página é o editor de Body
         cy.get('.cm-content').first().focus().clear().type('{"key": "json_val"}', { parseSpecialCharSequences: false });
-        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/post`, { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="{{base_url}}/api/..."]').clear().type(`${POSTMAN_ECHO}/post`, { parseSpecialCharSequences: false });
         cy.contains('button', 'Fazer Disparo').click({ force: true });
         cy.get('.body-content', { timeout: 25000 }).should('contain', 'json_val');
     });
@@ -57,7 +57,7 @@ describe('AuraFetch - Premium Features E2E', () => {
         cy.get('input[placeholder="Key"]').last().type('fd_key', { parseSpecialCharSequences: false });
         cy.get('input[placeholder="Value"]').last().type('fd_val', { parseSpecialCharSequences: false });
 
-        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/post`, { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="{{base_url}}/api/..."]').clear().type(`${POSTMAN_ECHO}/post`, { parseSpecialCharSequences: false });
         cy.contains('button', 'Fazer Disparo').click({ force: true });
         cy.get('.body-content', { timeout: 25000 }).should('contain', 'fd_key').and('contain', 'fd_val');
     });
@@ -75,7 +75,7 @@ describe('AuraFetch - Premium Features E2E', () => {
         cy.get('input[placeholder="Key"]').last().type('url_key', { parseSpecialCharSequences: false });
         cy.get('input[placeholder="Value"]').last().type('url_val', { parseSpecialCharSequences: false });
 
-        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/post`, { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="{{base_url}}/api/..."]').clear().type(`${POSTMAN_ECHO}/post`, { parseSpecialCharSequences: false });
         cy.contains('button', 'Fazer Disparo').click({ force: true });
         cy.get('.body-content', { timeout: 25000 }).should('contain', 'url_key').and('contain', 'url_val');
     });
@@ -101,7 +101,7 @@ describe('AuraFetch - Premium Features E2E', () => {
         cy.get('.sidebar-tree-container').contains('Listar Dados', { timeout: 10000 }).click({ force: true });
 
         // Use the global variable in the URL
-        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type('{{env_host}}/get', { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="{{base_url}}/api/..."]').clear().type('{{env_host}}/get', { parseSpecialCharSequences: false });
         cy.contains('button', 'Fazer Disparo').click({ force: true });
         cy.get('.status-badge', { timeout: 25000 }).should('contain', '200');
     });
@@ -124,7 +124,7 @@ describe('AuraFetch - Premium Features E2E', () => {
     // 7. RESPONSE HEADERS + CONSOLE
     // ────────────────────────────────────────────
     it('Deve validar Abas de Response Headers e Console', () => {
-        cy.get('input[placeholder="{{base_url}}/v1/users"]').clear().type(`${POSTMAN_ECHO}/get`, { parseSpecialCharSequences: false });
+        cy.get('input[placeholder="{{base_url}}/api/..."]').clear().type(`${POSTMAN_ECHO}/get`, { parseSpecialCharSequences: false });
         cy.contains('button', 'Fazer Disparo').click({ force: true });
         cy.get('.status-badge', { timeout: 25000 }).should('be.visible');
 
