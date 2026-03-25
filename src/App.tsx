@@ -16,7 +16,7 @@ import { save as tauriSave, open as tauriOpen } from '@tauri-apps/plugin-dialog'
 import { writeFile as tauriWriteFile, readFile as tauriReadFile } from '@tauri-apps/plugin-fs';
 import { isTauri } from '@tauri-apps/api/core';
 
-class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: Error | null }> {
+export class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: Error | null }> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
     this.state = { hasError: false, error: null };
@@ -238,43 +238,63 @@ const initialCollection: CollectionNode[] = [
 
 // Migration helper: convert legacy workspace format to new tree format
 const migrateWorkspacesToTreeFormat = (): CollectionNode[] | null => {
-  const savedV2 = localStorage.getItem('aurafetch_collection_v2');
-  if (savedV2) return JSON.parse(savedV2);
-
-  const savedOldWs = localStorage.getItem('aurafetch_workspaces');
-  if (savedOldWs) {
-    const oldWorkspaces: LegacyWorkspace[] = JSON.parse(savedOldWs);
-    return oldWorkspaces.map(ws => ({
-      id: ws.id,
-      name: ws.name,
-      type: 'workspace' as const,
-      expanded: true,
-      workspaceConfig: {
-        environments: ws.environments || [],
-        activeEnvironmentId: ws.activeEnvironmentId,
-        history: ws.history || []
-      },
-      children: ws.collection || []
-    }));
+  try {
+    const savedV2 = localStorage.getItem('aurafetch_collection_v2');
+    if (savedV2) return JSON.parse(savedV2);
+  } catch (e) {
+    console.warn('[AuraFetch] Coleção v2 corrompida, limpando...', e);
+    localStorage.removeItem('aurafetch_collection_v2');
   }
 
-  // Try old single-collection format
-  const oldCol = localStorage.getItem('aurafetch_collection');
-  const oldEnvs = localStorage.getItem('aurafetch_envs');
-  const oldActiveEnv = localStorage.getItem('aurafetch_env_active');
-  if (oldCol) {
-    return [{
-      id: 'ws_default',
-      name: 'Workspace Padrão',
-      type: 'workspace' as const,
-      expanded: true,
-      workspaceConfig: {
-        environments: oldEnvs ? JSON.parse(oldEnvs) : [],
-        activeEnvironmentId: oldActiveEnv || null,
-        history: []
-      },
-      children: JSON.parse(oldCol)
-    }];
+  try {
+    const savedOldWs = localStorage.getItem('aurafetch_workspaces');
+    if (savedOldWs) {
+      const oldWorkspaces: LegacyWorkspace[] = JSON.parse(savedOldWs);
+      return oldWorkspaces.map(ws => ({
+        id: ws.id,
+        name: ws.name,
+        type: 'workspace' as const,
+        expanded: true,
+        workspaceConfig: {
+          environments: ws.environments || [],
+          activeEnvironmentId: ws.activeEnvironmentId,
+          history: ws.history || []
+        },
+        children: ws.collection || []
+      }));
+    }
+  } catch (e) {
+    console.warn('[AuraFetch] Workspaces legados corrompidos, limpando...', e);
+    localStorage.removeItem('aurafetch_workspaces');
+  }
+
+  try {
+    const oldCol = localStorage.getItem('aurafetch_collection');
+    if (oldCol) {
+      let parsedEnvs: Environment[] = [];
+      try {
+        const oldEnvs = localStorage.getItem('aurafetch_envs');
+        parsedEnvs = oldEnvs ? JSON.parse(oldEnvs) : [];
+      } catch { /* envs corrompidos, usar vazio */ }
+
+      return [{
+        id: 'ws_default',
+        name: 'Workspace Padrão',
+        type: 'workspace' as const,
+        expanded: true,
+        workspaceConfig: {
+          environments: parsedEnvs,
+          activeEnvironmentId: localStorage.getItem('aurafetch_env_active') || null,
+          history: []
+        },
+        children: JSON.parse(oldCol)
+      }];
+    }
+  } catch (e) {
+    console.warn('[AuraFetch] Coleção legada corrompida, limpando...', e);
+    localStorage.removeItem('aurafetch_collection');
+    localStorage.removeItem('aurafetch_envs');
+    localStorage.removeItem('aurafetch_env_active');
   }
 
   return null;
@@ -390,8 +410,14 @@ export default function App() {
   const [sidebarTab, setSidebarTab] = useState<'collection' | 'history'>('collection');
   const [treeSearchQuery, setTreeSearchQuery] = useState('');
   const [globalVariables, setGlobalVariables] = useState<EnvVar[]>(() => {
-    const saved = localStorage.getItem('aurafetch_globals');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('aurafetch_globals');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.warn('[AuraFetch] Variáveis globais corrompidas, limpando...', e);
+      localStorage.removeItem('aurafetch_globals');
+      return [];
+    }
   });
 
   // --- Workspace Context Helpers ---
@@ -2673,7 +2699,6 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
 
       {/* Main Content */}
       <main className="main-content">
-        <ErrorBoundary>
         {!activeNode ? (
           /* WELCOME SCREEN */
           <div className="fade-in" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
@@ -3716,7 +3741,6 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
             </div> {/* End of editor-layout */}
           </>
         )}
-        </ErrorBoundary>
       </main>
 
       {/* Loading Overlay */}
