@@ -1,166 +1,167 @@
-# AuraFetch — Refactor, Bug Fix & Rename Design Spec
+# AuraFetch — Especificação de Refatoração, Correção de Bugs e Renomeação
 
-**Date:** 2026-03-24
-**Author:** Eder Ferraz Caciano
-**Status:** Approved
-
----
-
-## Overview
-
-AuraFetch is a desktop API client (Postman/Insomnia alternative) built with Tauri 2 (Rust) + React 19 + TypeScript. Currently at v1.3.1, the app has critical bugs reported by users and a monolithic architecture (`App.tsx` with 3,741 lines) that makes maintenance and evolution difficult.
-
-This spec covers a 4-phase plan to stabilize, refactor, and rebrand the project.
+**Data:** 2026-03-24
+**Autor:** Eder Ferraz Caciano
+**Status:** Aprovado
 
 ---
 
-## Goals
+## Visão Geral
 
-- Fix all critical bugs affecting users (white screen, file upload freeze, large response freeze)
-- Identify and fix all latent bugs through a thorough audit
-- Break the monolithic `App.tsx` into maintainable, testable components
-- Rename and rebrand the project to **HTTPilot**
-- Keep the app functional and deployable after each phase
+AuraFetch é um cliente de API desktop (alternativa ao Postman/Insomnia) construído com Tauri 2 (Rust) + React 19 + TypeScript. Atualmente na versão 1.3.1, o app possui bugs críticos reportados por usuários e uma arquitetura monolítica (`App.tsx` com 3.741 linhas) que dificulta a manutenção e evolução do projeto.
+
+Este documento cobre um plano de 4 fases para estabilizar, refatorar e rebatizar o projeto.
 
 ---
 
-## Non-Goals
+## Objetivos
 
-- New features during phases 0–2
-- Rewrite in another framework (staying with React)
-- Changes to backend Rust/Tauri code (unless required by a bug fix)
-- Breaking the pre-request script API (`aurafetch.setEnv()`, `aurafetch.setVar()`, `aurafetch.log()`) — user scripts saved in collections depend on this interface
+- Corrigir todos os bugs críticos que afetam usuários (tela branca, travamento ao enviar arquivo, travamento com resposta grande)
+- Identificar e corrigir todos os bugs latentes por meio de uma auditoria completa
+- Quebrar o `App.tsx` monolítico em componentes pequenos e manuteníveis
+- Renomear e rebatizar o projeto para **HTTPilot**
+- Manter o app funcional e disponível para deploy após cada fase
 
 ---
 
-## Phase 0 — Deep Audit
+## Fora do Escopo
 
-**Goal:** Map every bug and issue in the codebase before writing a single fix.
+- Novas funcionalidades durante as fases 0 a 2
+- Reescrever em outro framework (continuamos com React)
+- Alterações no backend Rust/Tauri (exceto se exigido por algum bug)
+- Quebrar a API de scripts de pré-requisição (`aurafetch.setEnv()`, `aurafetch.setVar()`, `aurafetch.log()`) — scripts salvos pelos usuários nas coleções dependem dessa interface
 
-### What will be inspected
+---
 
-| Category | What to look for |
+## Fase 0 — Auditoria Completa
+
+**Objetivo:** Mapear todos os bugs e problemas do código antes de escrever qualquer correção.
+
+### O que será inspecionado
+
+| Categoria | O que procurar |
 |---|---|
-| Crashes / white screen | Unhandled errors reaching the render tree, insufficient Error Boundary coverage, module load failures at `main.tsx` level |
-| File upload freeze | Missing file size limits, synchronous blocking reads in `tauriReadFile`, lack of streaming |
-| Large response freeze | `JSON.parse` of huge payloads on the main thread, `localStorage.setItem` of the full collection after each response (double block) |
-| Memory leaks | WebSocket connections not closed, accumulating event listeners, uncleaned timers |
-| Inconsistent state | Dirty data between requests, environments not resetting correctly |
-| Web vs desktop gaps | Tauri-only features called without browser fallback |
-| Silent errors | `try/catch` blocks that swallow errors without logging |
-| Performance | Unnecessary re-renders, missing memoization on expensive components |
-| Script API stability | The `aurafetchCtx` / `aurafetch.setEnv()` / `aurafetch.setVar()` / `aurafetch.log()` API surface is used in saved user scripts — flag anything that could break it |
-| Other latent bugs | Any suspicious behavior that hasn't crashed yet but likely will |
+| Crashes / tela branca | Erros não tratados chegando à árvore de renderização, cobertura insuficiente do Error Boundary, falhas no carregamento do módulo em nível de `main.tsx` |
+| Travamento ao enviar arquivo | Falta de limite de tamanho de arquivo, leitura síncrona bloqueante em `tauriReadFile`, ausência de streaming |
+| Travamento com resposta grande | `JSON.parse` de payloads grandes na thread principal, `localStorage.setItem` serializando a coleção inteira (incluindo o corpo da resposta) a cada atualização de estado — duplo bloqueio |
+| Memory leaks | Conexões WebSocket não fechadas, event listeners acumulando, timers sem cleanup |
+| Estado inconsistente | Dados sujos entre requisições, environments não sendo resetados corretamente |
+| Diferenças web vs. desktop | Funcionalidades exclusivas do Tauri sendo chamadas sem fallback no browser |
+| Erros silenciosos | Blocos `try/catch` que engolam erros sem registrar no console |
+| Performance | Re-renders desnecessários, ausência de memoização em componentes pesados |
+| Estabilidade da API de scripts | A superfície `aurafetchCtx` / `aurafetch.setEnv()` / `aurafetch.setVar()` / `aurafetch.log()` é usada em scripts salvos pelos usuários — qualquer coisa que possa quebrá-la deve ser sinalizada |
+| Outros bugs latentes | Qualquer comportamento suspeito que ainda não causou crash mas provavelmente vai causar |
 
-### Deliverable
+### Entrega
 
-A prioritized bug list (P0/P1/P2) presented to the user before any code changes begin.
+Uma lista priorizada de bugs (P0/P1/P2) apresentada ao usuário antes de qualquer alteração no código.
 
 ---
 
-## Phase 1 — Bug Fixes
+## Fase 1 — Correção de Bugs
 
-**Goal:** Fix all identified bugs, highest priority first.
+**Objetivo:** Corrigir todos os bugs identificados, começando pelos de maior prioridade.
 
-- Each bug gets its own commit with a clear description of what was fixed and why
-- Fixes are minimal and scoped — no refactoring mixed in
-- After fixes: deploy to both desktop (Tauri) and web (GitHub Pages) and verify
+- Cada bug recebe seu próprio commit com descrição clara do que foi corrigido e por quê
+- As correções são mínimas e pontuais — sem refatoração misturada
+- Após as correções: deploy em ambas as versões (desktop via Tauri e web via GitHub Pages) e verificação
 
-### Known bugs (pre-audit)
+### Bugs conhecidos (pré-auditoria)
 
-| Bug | Severity | Affected builds | Suspected failure point |
+| Bug | Severidade | Versões afetadas | Ponto de falha suspeito |
 |---|---|---|---|
-| White screen | P0 | Both web and desktop | Unhandled error bypassing the existing `ErrorBoundary` (likely at module load or `main.tsx` level, before the boundary is mounted) |
-| File upload freeze | P0 | Both web and desktop | `tauriReadFile` reading the full file into memory synchronously before transmitting; no size limit guard |
-| Large response freeze | P0 | Both web and desktop | Two compounding blocks: (1) `JSON.parse` of the full payload on the main thread, (2) `localStorage.setItem` serializing the entire collection including the large response body on every state update |
+| Tela branca | P0 | Ambas (web e desktop) | Erro não tratado contornando o `ErrorBoundary` existente (provavelmente em nível de carregamento de módulo ou `main.tsx`, antes da boundary ser montada) |
+| Travamento ao enviar arquivo | P0 | Ambas (web e desktop) | `tauriReadFile` lendo o arquivo completo na memória de forma síncrona antes de transmitir; sem verificação de tamanho máximo |
+| Travamento com resposta grande | P0 | Ambas (web e desktop) | Dois bloqueios combinados: (1) `JSON.parse` do payload completo na thread principal, (2) `localStorage.setItem` serializando toda a coleção — incluindo o corpo da resposta grande — a cada atualização de estado |
 
 ---
 
-## Phase 2 — Componentization
+## Fase 2 — Componentização
 
-**Goal:** Break `App.tsx` (3,741 lines) into focused, single-responsibility components.
+**Objetivo:** Quebrar o `App.tsx` (3.741 linhas) em componentes pequenos com responsabilidade única.
 
-### State Management Approach
+### Estratégia de Gerenciamento de Estado
 
-The current `App.tsx` has 28 `useState` calls and no shared context. Simply extracting components with prop drilling is not viable — `CollectionTree`, `RequestBuilder`, `RequestTabs`, and `ResponseViewer` all need access to the same active request state.
+O `App.tsx` atual tem 28 chamadas `useState` e nenhum contexto compartilhado. Extrair componentes com passagem de props simples não é viável — `CollectionTree`, `RequestBuilder`, `RequestTabs` e `ResponseViewer` precisam todos acessar o mesmo estado de requisição ativa.
 
-**Strategy:** Introduce a single `RequestContext` (React Context) that holds the shared active-request state:
-- Active request node (`activeNodeId`, `activeRequest`)
-- Collection tree (`collection`)
-- Global variables and environments (`globalVariables`, `activeEnv`, `environments`)
-- Loading and response state (`loading`, `savedResponse`)
+**Estratégia:** Introduzir um único `RequestContext` (React Context) que mantém o estado compartilhado da requisição ativa:
+- Nó de requisição ativa (`activeNodeId`, `activeRequest`)
+- Árvore de coleções (`collection`)
+- Variáveis globais e environments (`globalVariables`, `activeEnv`, `environments`)
+- Estado de carregamento e resposta (`loading`, `savedResponse`)
 
-Each component reads from context only what it needs. Local state (e.g., which body tab is open) stays local in the component. Hooks (`useRequest`, `useCollection`, etc.) encapsulate the logic and update context via callbacks.
+Cada componente lê do contexto apenas o que precisa. Estado local (ex: qual aba do body está aberta) permanece local no componente. Os hooks (`useRequest`, `useCollection`, etc.) encapsulam a lógica e atualizam o contexto via callbacks.
 
-This is the lightest approach that works — no external state library needed.
+Esta é a abordagem mais leve que funciona — sem biblioteca de estado externo.
 
-### Target directory structure
+### Estrutura de pastas alvo
 
 ```
 src/
 ├── assets/
-│   ├── logo.png             # HTTPilot logo
-│   └── logo.svg             # HTTPilot logo (vector)
+│   ├── logo.png             # Logo HTTPilot
+│   └── logo.svg             # Logo HTTPilot (vetor)
 ├── styles/
-│   ├── global.css           # Reset, CSS variables, fonts (extracted from index.css)
-│   ├── themes.css           # Dark theme, color palette, gradients
-│   └── animations.css       # Transitions and keyframes
+│   ├── global.css           # Reset, variáveis CSS, fontes (extraído do index.css)
+│   ├── themes.css           # Tema dark, paleta de cores, gradientes
+│   └── animations.css       # Transições e keyframes
 ├── components/
-│   ├── ErrorBoundary/       # Error boundary (currently inline in App.tsx)
-│   ├── RequestBuilder/      # URL bar, HTTP method selector, send button
-│   ├── RequestTabs/         # Body, Headers, Auth, Params, Scripts tabs
-│   ├── ResponseViewer/      # Status, response tabs, JSON/HTML/image rendering
-│   ├── CollectionTree/      # Sidebar with collections, folders, requests
-│   ├── HistoryPanel/        # Request history sidebar (separate from CollectionTree)
-│   ├── EnvironmentPanel/    # Environment manager and variable editor
-│   ├── WebSocketPanel/      # WebSocket-specific UI
-│   ├── Console/             # Logs and timestamps
-│   └── CodeSnippet/         # cURL/fetch/axios code generator
+│   ├── ErrorBoundary/       # Error boundary (atualmente inline no App.tsx)
+│   ├── RequestBuilder/      # Barra de URL, seletor de método HTTP, botão de envio
+│   ├── RequestTabs/         # Abas: Body, Headers, Auth, Params, Scripts
+│   ├── ResponseViewer/      # Status, abas de resposta, renderização de JSON/HTML/imagem
+│   ├── CollectionTree/      # Sidebar com coleções, pastas e requisições
+│   ├── HistoryPanel/        # Histórico de requisições (separado do CollectionTree)
+│   ├── EnvironmentPanel/    # Gerenciador de environments e editor de variáveis
+│   ├── WebSocketPanel/      # UI específica de WebSocket
+│   ├── Console/             # Logs e timestamps
+│   └── CodeSnippet/         # Gerador de código: cURL/fetch/axios
 ├── context/
-│   └── RequestContext.tsx   # Shared active-request state (React Context)
+│   └── RequestContext.tsx   # Estado compartilhado da requisição ativa (React Context)
 ├── hooks/
-│   ├── useRequest.ts        # Request sending logic
-│   ├── useWebSocket.ts      # WebSocket connection logic
-│   ├── useCollection.ts     # Collection/folder CRUD
-│   └── useEnvironment.ts    # Environment management
+│   ├── useRequest.ts        # Lógica de envio de requisições
+│   ├── useWebSocket.ts      # Lógica de conexão WebSocket
+│   ├── useCollection.ts     # CRUD de coleções e pastas
+│   └── useEnvironment.ts    # Gerenciamento de environments
 ├── types/
-│   └── index.ts             # All TypeScript types (extracted from App.tsx)
+│   └── index.ts             # Todos os tipos TypeScript (extraídos do App.tsx)
 ├── utils/
-│   └── safeFetch.ts         # Tauri/browser fetch wrapper (extracted from App.tsx)
-├── App.tsx                  # Lightweight orchestrator (~100 lines)
+│   └── safeFetch.ts         # Wrapper Tauri/browser fetch (extraído do App.tsx)
+├── App.tsx                  # Orquestrador leve (~100 linhas)
 └── main.tsx
 ```
 
-### Approach
+### Ordem de execução
 
-- Extract `types/index.ts` and `utils/safeFetch.ts` first (zero risk, no UI change)
-- Extract `ErrorBoundary` next
-- Set up `RequestContext` before touching any visible component
-- Extract one component at a time, verifying no regressions after each
-- Extract hooks alongside components to keep logic co-located
-- `App.tsx` becomes a thin orchestrator that wraps context and renders layout
+- Extrair `types/index.ts` e `utils/safeFetch.ts` primeiro (risco zero, sem alteração de UI)
+- Extrair o `ErrorBoundary` em seguida
+- Configurar o `RequestContext` antes de tocar em qualquer componente visível
+- Extrair um componente por vez, verificando que não houve regressões após cada extração
+- Extrair hooks junto com os componentes para manter lógica co-localizada
+- `App.tsx` se torna um orquestrador fino que envolve o contexto e renderiza o layout
 
-### Note on CodeMirror
+### Nota sobre o CodeMirror
 
-`ResponseViewer` and `RequestTabs` both embed CodeMirror editor instances. CodeMirror setup in React requires ~20–40 lines of boilerplate per instance. The 300-line limit per component is still achievable, but keep CodeMirror config co-located with its component rather than abstracting it prematurely.
+`ResponseViewer` e `RequestTabs` embbutem instâncias do editor CodeMirror. A configuração do CodeMirror no React requer ~20–40 linhas de boilerplate por instância. O limite de 300 linhas por componente ainda é atingível, mas mantenha a configuração do CodeMirror dentro do próprio componente — sem abstrair prematuramente.
 
 ---
 
-## Phase 3 — Rename to HTTPilot
+## Fase 3 — Renomeação para HTTPilot
 
-**Goal:** Fully rebrand the project from AuraFetch to HTTPilot.
+**Objetivo:** Rebatizar completamente o projeto de AuraFetch para HTTPilot.
 
-### localStorage Migration (critical — do this first in Phase 3)
+### Migração do localStorage (crítico — fazer primeiro na Fase 3)
 
-The app stores user data in `localStorage` under keys prefixed with `aurafetch_`. Renaming these keys without migration will silently wipe all user workspaces on upgrade.
+O app armazena dados do usuário no `localStorage` com chaves prefixadas por `aurafetch_`. Renomear essas chaves sem migração vai apagar silenciosamente todos os workspaces dos usuários ao atualizar.
 
-**Migration shim** (run once on app startup, before any data reads):
+**Shim de migração** (executar uma vez na inicialização do app, antes de qualquer leitura de dados):
 
 ```typescript
 const keyMap: Record<string, string> = {
   'aurafetch_collection_v2': 'httppilot_collection_v2',
-  // 'aurafetch_workspaces' is a legacy v1.x read-only key — already migrated into
-  // 'aurafetch_collection_v2' by existing startup code. Only remove it, don't write a new key.
+  // 'aurafetch_workspaces' é uma chave legada de v1.x — somente leitura,
+  // já migrada para 'aurafetch_collection_v2' pelo código de startup existente.
+  // Não escrever uma nova chave, apenas remover a antiga.
   'aurafetch_globals': 'httppilot_globals',
   'aurafetch_collection': 'httppilot_collection',
   'aurafetch_envs': 'httppilot_envs',
@@ -173,75 +174,75 @@ Object.entries(keyMap).forEach(([oldKey, newKey]) => {
     localStorage.removeItem(oldKey);
   }
 });
-// Clean up the legacy key (no corresponding new write needed)
+// Limpar a chave legada (sem write correspondente)
 localStorage.removeItem('aurafetch_workspaces');
 ```
 
-After migration, update all `localStorage.getItem/setItem` calls throughout the codebase to use the `httppilot_` prefix.
+Após a migração, atualizar todas as chamadas `localStorage.getItem/setItem` no código para usar o prefixo `httppilot_`.
 
-### Scripting API backward-compat note
+### Nota sobre compatibilidade retroativa da API de scripts
 
-Phase 3 renames `aurafetchCtx` to `httppilotCtx`, which changes the runtime object passed to user pre-request scripts from `aurafetch` to `httppilot`. **Existing saved user scripts call `aurafetch.setEnv(...)`, `aurafetch.setVar(...)`, and `aurafetch.log(...)` by name** — these will silently break after rename.
+Na Fase 3, `aurafetchCtx` será renomeado para `httppilotCtx`, o que muda o objeto de runtime passado aos scripts de pré-requisição de `aurafetch` para `httppilot`. **Scripts salvos pelos usuários chamam `aurafetch.setEnv(...)`, `aurafetch.setVar(...)` e `aurafetch.log(...)` pelo nome** — eles vão quebrar silenciosamente após a renomeação.
 
-**Fix:** In the script runner (`fn(aurafetchCtx)` call), pass both the new and old names for one release:
+**Correção:** No runner de scripts (chamada `fn(aurafetchCtx,...)`), passar ambos os nomes por uma release:
 
 ```typescript
-// Before (current):
-fn(aurafetchCtx)
+// Antes (atual):
+fn(aurafetchCtx, customFetch, customFetch)
 
-// After rename (Phase 3):
-fn(httppilotCtx, httppilotCtx)  // second arg = backward-compat alias
-// or more explicitly via fn signature:
-// fn({ httppilot: httppilotCtx, aurafetch: httppilotCtx })
+// Após renomeação (Fase 3):
+// Renomear parâmetro para 'httppilot' e adicionar alias 'aurafetch' apontando para o mesmo objeto
+fn(httppilotCtx, httppilotCtx, customFetch, customFetch)
+// onde a assinatura da função é: new AsyncFunction('httppilot', 'aurafetch', 'fetch', 'tauriFetch', scriptBody)
 ```
 
-This ensures scripts written against `aurafetch.*` continue to work. The `aurafetch` alias can be removed in a future release after users have had time to migrate their scripts.
+Isso garante que scripts escritos para `aurafetch.*` continuem funcionando. O alias `aurafetch` pode ser removido em uma release futura, após os usuários terem tido tempo de migrar seus scripts.
 
-### Files to update
+### Arquivos a atualizar
 
-| File | What to change |
+| Arquivo | O que alterar |
 |---|---|
-| `package.json` | `name: "httppilot"`, `description`, `homepage`, `repository.url`, `keywords` (remove `aurafetch`, add `httppilot`) |
+| `package.json` | `name: "httppilot"`, `description`, `homepage`, `repository.url`, `keywords` (remover `aurafetch`, adicionar `httppilot`) |
 | `src-tauri/tauri.conf.json` | `productName: "HTTPilot"`, `identifier: "com.httppilot.desktop"`, `app.windows[0].title: "HTTPilot"` |
-| `src-tauri/Cargo.toml` | `name = "app"` → `name = "httppilot"` and `name = "app_lib"` → `name = "httppilot_lib"` (current values are `"app"` / `"app_lib"`, not `"aurafetch"`) |
+| `src-tauri/Cargo.toml` | `name = "app"` → `name = "httppilot"` e `name = "app_lib"` → `name = "httppilot_lib"` (os valores atuais são `"app"` / `"app_lib"`, não `"aurafetch"`) |
 | `vite.config.ts` | `base: '/AuraFetch/'` (PascalCase) → `base: '/httppilot/'` |
-| `index.html` | `<title>HTTPilot</title>`, set favicon to new logo (`public/httppilot_logo.png`). Note: current favicon is `vite.svg` (default Vite asset, never branded) — `public/aurafetch_logo.png` exists but is not referenced in `index.html` |
-| `src/App.tsx` | localStorage keys (see migration above), `aurafetchCtx` → `httppilotCtx`, scripting API object rename: `aurafetch.setEnv()` / `aurafetch.setVar()` / `aurafetch.log()` → `httppilot.*` (keep `aurafetch` as a backward-compat alias for one release — see note below), file-save dialog filter `'AuraFetch Workspace'` → `'HTTPilot Workspace'`, default filename `'aurafetch_workspace.json'` → `'httppilot_workspace.json'` |
-| `cypress/e2e/*.cy.ts` (5 files) | `describe('AuraFetch - ...')` suite names → `describe('HTTPilot - ...')` |
-| `README.md` | Full rebrand of content |
-| `CHANGELOG.md` | Add rebrand note |
-| `public/` | Replace `aurafetch_logo.png` with `httppilot_logo.png` |
-| `src/assets/` | Add `logo.png` and `logo.svg` for HTTPilot |
-| GitHub repo | Rename repository (user action — do last, after all files are updated) |
+| `index.html` | `<title>HTTPilot</title>`, definir favicon para o novo logo (`public/httppilot_logo.png`). Nota: o favicon atual é `vite.svg` (asset padrão do Vite, nunca foi trocado) — `public/aurafetch_logo.png` existe mas não está referenciado no `index.html` |
+| `src/App.tsx` | Chaves do localStorage (ver migração acima), `aurafetchCtx` → `httppilotCtx`, renomear API de scripts: `aurafetch.setEnv()` / `aurafetch.setVar()` / `aurafetch.log()` → `httppilot.*` (manter `aurafetch` como alias retrocompatível por uma release — ver nota acima), filtro do diálogo de salvar arquivo `'AuraFetch Workspace'` → `'HTTPilot Workspace'`, nome padrão do arquivo `'aurafetch_workspace.json'` → `'httppilot_workspace.json'` |
+| `cypress/e2e/*.cy.ts` (5 arquivos) | Nomes dos suites `describe('AuraFetch - ...')` → `describe('HTTPilot - ...')` |
+| `README.md` | Rebrand completo do conteúdo |
+| `CHANGELOG.md` | Adicionar nota de rebrand |
+| `public/` | Substituir `aurafetch_logo.png` por `httppilot_logo.png` |
+| `src/assets/` | Adicionar `logo.png` e `logo.svg` do HTTPilot |
+| Repositório GitHub | Renomear o repositório (ação do usuário — fazer por último, após todos os arquivos atualizados) |
 
 ---
 
-## Tech Stack (unchanged)
+## Stack Tecnológica (sem alterações)
 
 - **Desktop:** Tauri 2 (Rust)
 - **Frontend:** React 19 + TypeScript
 - **Bundler:** Vite 7
 - **Editor:** CodeMirror 6
-- **Icons:** Lucide React
-- **Testing:** Cypress 15 (E2E)
+- **Ícones:** Lucide React
+- **Testes:** Cypress 15 (E2E)
 
 ---
 
-## Success Criteria
+## Critérios de Sucesso
 
-- [ ] Zero crashes/freezes on: page load, file upload, large responses
-- [ ] All existing Cypress E2E tests pass after each phase
-- [ ] `App.tsx` reduced to ~100 lines
-- [ ] No component file exceeds 300 lines (CodeMirror boilerplate included)
-- [ ] Project correctly named HTTPilot across all config files
-- [ ] Existing user localStorage data migrated without loss on upgrade
-- [ ] GitHub Pages deploys successfully under new name
+- [ ] Zero crashes/travamentos em: carregamento da página, envio de arquivo, respostas grandes
+- [ ] Todos os testes Cypress E2E passando após cada fase
+- [ ] `App.tsx` reduzido a ~100 linhas
+- [ ] Nenhum arquivo de componente excede 300 linhas (incluindo boilerplate do CodeMirror)
+- [ ] Projeto corretamente nomeado como HTTPilot em todos os arquivos de configuração
+- [ ] Dados do localStorage dos usuários migrados sem perda na atualização
+- [ ] GitHub Pages fazendo deploy com sucesso com o novo nome
 
 ---
 
-## Out of Scope (future roadmap)
+## Fora do Escopo (roadmap futuro)
 
-- Team collaboration
-- Plugin system
-- macOS / Linux builds
-- Unit tests (beyond existing Cypress E2E)
+- Colaboração em equipe
+- Sistema de plugins
+- Builds para macOS / Linux
+- Testes unitários (além dos Cypress E2E existentes)
