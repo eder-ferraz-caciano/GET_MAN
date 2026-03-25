@@ -115,16 +115,16 @@ interface RequestModel {
   graphqlVariables?: string;
   wsMessages?: { id: string; type: 'sent' | 'received' | 'info' | 'error'; text: string; timestamp: number }[];
   binaryFile?: { name: string; path: string } | null;
-  savedResponse?: {
-    status: number;
-    statusText: string;
-    data: any;
-    time: number;
-    type?: 'json' | 'image' | 'pdf' | 'html' | 'text' | 'binary' | 'ws';
-    contentType?: string;
-    headers?: Record<string, string>;
-  } | null;
-  savedLogs?: LogEntry[];
+}
+
+interface SavedResponse {
+  status: number;
+  statusText: string;
+  data: any;
+  time: number;
+  type?: 'json' | 'image' | 'pdf' | 'html' | 'text' | 'binary' | 'ws';
+  contentType?: string;
+  headers?: Record<string, string>;
 }
 
 interface CollectionNode {
@@ -145,7 +145,6 @@ interface CollectionNode {
     history: HistoryEntry[];
   };
   expanded?: boolean;
-  savedLogs?: LogEntry[];
 }
 
 interface LogEntry {
@@ -512,7 +511,7 @@ export default function App() {
   const [copiedRes, setCopiedRes] = useState(false);
 
   // Response and logs live outside the collection — not persisted to localStorage
-  const [activeResponse, setActiveResponse] = useState<RequestModel['savedResponse']>(null);
+  const [activeResponse, setActiveResponse] = useState<SavedResponse | null>(null);
   const [activeLogs, setActiveLogs] = useState<LogEntry[]>([]);
 
   const switchActiveNode = (nodeId: string | null) => {
@@ -783,7 +782,7 @@ export default function App() {
     });
   };
 
-  const handleActiveReqChange = (updates: Partial<RequestModel>) => {
+  const handleActiveReqChange = (updates: Partial<RequestModel> & { savedResponse?: SavedResponse | null; savedLogs?: LogEntry[] }) => {
     if (!activeNodeId) return;
 
     // Redirect response and logs to separate state — not stored in collection
