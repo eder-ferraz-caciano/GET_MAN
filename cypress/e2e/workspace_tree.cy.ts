@@ -82,7 +82,6 @@ describe('AuraFetch – Workspace & Tree E2E', () => {
 
         it('Deve criar múltiplos Workspaces e todos coexistirem', () => {
             createWorkspace('WS Alpha');
-            // Need to re-stub for the second prompt
             createWorkspace('WS Beta');
             cy.get('.sidebar-tree-container .workspace-node').should('have.length', 3);
         });

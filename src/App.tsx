@@ -1174,10 +1174,6 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
     const path = getPath(collection, targetNodeId, []);
     const activeEnv = getActiveEnvironment(targetNodeId);
 
-    // Debugging only if it's a request or if there's an issue
-    if (result.includes('{{') && !path) {
-    }
-
     while (result.includes('{{') && iterations < MAX_ITERATIONS) {
       const nextResult = result.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
         const trimmedKey = key.trim();
