@@ -1,5 +1,6 @@
 import './index.css';
-import React, { useState, useRef, useEffect, useCallback, Fragment } from 'react';
+import React, { useState, useRef, useEffect, Fragment } from 'react';
+import { useRequestContext } from './context/RequestContext';
 import {
   Folder, FileText, Plus, Download, Upload,
   Play, Square, Trash2, Send, Clock, Edit2, FilePlus, Terminal, AlertTriangle,
@@ -16,9 +17,8 @@ import { save as tauriSave, open as tauriOpen } from '@tauri-apps/plugin-dialog'
 import { writeFile as tauriWriteFile } from '@tauri-apps/plugin-fs';
 import { isTauri } from '@tauri-apps/api/core';
 import { safeFetch, readFileWithSizeGuard, MAX_FILE_UPLOAD_MB, MAX_FILE_UPLOAD_BYTES } from './utils/safeFetch';
-import { ErrorBoundary } from './components/ErrorBoundary';
 
-import type { HttpMethod, AuthType, RequestHeader, EnvVar, Environment, AuthConfig, RequestBodyType, FormDataField, RequestModel, SavedResponse, CollectionNode, LogEntry, LegacyWorkspace, HistoryEntry } from './types';
+import type { HttpMethod, AuthType, RequestHeader, Environment, AuthConfig, RequestBodyType, RequestModel, SavedResponse, CollectionNode, LogEntry, HistoryEntry } from './types';
 
 // Initial Data
 const defaultRequest: RequestModel = {
@@ -41,107 +41,6 @@ const defaultRequest: RequestModel = {
 
 const defaultFolderAuth: AuthConfig = {
   type: 'none'
-};
-
-const initialCollection: CollectionNode[] = [
-  {
-    id: 'ws_default',
-    name: 'Workspace Padrão',
-    type: 'workspace',
-    expanded: true,
-    workspaceConfig: {
-      environments: [
-        { id: 'env_dev', name: 'Ambiente DEV', variables: [{ id: uuidv4(), key: 'base_url', value: 'http://localhost:3000' }] },
-        { id: 'env_prod', name: 'Ambiente PROD', variables: [{ id: uuidv4(), key: 'base_url', value: 'https://api.myapp.com' }] }
-      ],
-      activeEnvironmentId: 'env_dev',
-      history: []
-    },
-    children: [
-      {
-        id: '1',
-        name: 'Meu Servidor/Projeto',
-        type: 'folder',
-        expanded: true,
-        folderConfig: {
-          auth: { type: 'bearer', token: '{{token_acesso}}' },
-          variables: []
-        },
-        children: [
-          {
-            id: '1a',
-            name: 'Listar Dados (Rota GET)',
-            type: 'request',
-            request: { ...defaultRequest, id: '1a', name: 'Listar Dados (Rota GET)', headers: defaultRequest.headers.map(h => ({ ...h })) }
-          }
-        ]
-      }
-    ]
-  }
-];
-
-// Migration helper: convert legacy workspace format to new tree format
-const migrateWorkspacesToTreeFormat = (): CollectionNode[] | null => {
-  try {
-    const savedV2 = localStorage.getItem('aurafetch_collection_v2');
-    if (savedV2) return JSON.parse(savedV2);
-  } catch (e) {
-    console.warn('[AuraFetch] Coleção v2 corrompida, limpando...', e);
-    localStorage.removeItem('aurafetch_collection_v2');
-  }
-
-  try {
-    const savedOldWs = localStorage.getItem('aurafetch_workspaces');
-    if (savedOldWs) {
-      const oldWorkspaces: LegacyWorkspace[] = JSON.parse(savedOldWs);
-      return oldWorkspaces.map(ws => ({
-        id: ws.id,
-        name: ws.name,
-        type: 'workspace' as const,
-        expanded: true,
-        workspaceConfig: {
-          environments: ws.environments || [],
-          activeEnvironmentId: ws.activeEnvironmentId,
-          history: ws.history || []
-        },
-        children: ws.collection || []
-      }));
-    }
-  } catch (e) {
-    console.warn('[AuraFetch] Workspaces legados corrompidos, limpando...', e);
-    localStorage.removeItem('aurafetch_workspaces');
-  }
-
-  try {
-    const oldCol = localStorage.getItem('aurafetch_collection');
-    if (oldCol) {
-      let parsedEnvs: Environment[] = [];
-      try {
-        const oldEnvs = localStorage.getItem('aurafetch_envs');
-        parsedEnvs = oldEnvs ? JSON.parse(oldEnvs) : [];
-      } catch { /* envs corrompidos, usar vazio */ }
-
-      return [{
-        id: 'ws_default',
-        name: 'Workspace Padrão',
-        type: 'workspace' as const,
-        expanded: true,
-        workspaceConfig: {
-          environments: parsedEnvs,
-          activeEnvironmentId: localStorage.getItem('aurafetch_env_active') || null,
-          history: []
-        },
-        children: JSON.parse(oldCol)
-      }];
-    }
-  } catch (e) {
-    console.warn('[AuraFetch] Coleção legada corrompida, limpando...', e);
-    localStorage.removeItem('aurafetch_collection');
-    localStorage.removeItem('aurafetch_envs');
-    localStorage.removeItem('aurafetch_env_active');
-  }
-
-  return null;
 };
 
 const renderOAuth2Fields = (config: AuthConfig['oauth2Config'], onChange: (updates: Partial<AuthConfig['oauth2Config']>) => void) => {
@@ -244,25 +143,19 @@ const AutoScrollEnd = ({ dependency }: { dependency: any }) => {
 
 export default function App() {
   // ---------------------------------------------------------
-  // COLLECTION ENGINE (Workspaces are root nodes in tree)
+  // REQUEST CONTEXT (Global state from RequestProvider)
   // ---------------------------------------------------------
-  const [collection, setCollection] = useState<CollectionNode[]>(() => {
-    const migrated = migrateWorkspacesToTreeFormat();
-    return migrated || initialCollection;
-  });
-
-  const [sidebarTab, setSidebarTab] = useState<'collection' | 'history'>('collection');
-  const [treeSearchQuery, setTreeSearchQuery] = useState('');
-  const [globalVariables, setGlobalVariables] = useState<EnvVar[]>(() => {
-    try {
-      const saved = localStorage.getItem('aurafetch_globals');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      console.warn('[AuraFetch] Variáveis globais corrompidas, limpando...', e);
-      localStorage.removeItem('aurafetch_globals');
-      return [];
-    }
-  });
+  const {
+    collection, setCollection,
+    sidebarTab, setSidebarTab,
+    treeSearchQuery, setTreeSearchQuery,
+    globalVariables, setGlobalVariables,
+    activeNodeId, setActiveNodeId,
+    activeResponse, setActiveResponse,
+    activeLogs, setActiveLogs, addLog,
+    wsConnected, setWsConnected,
+    wsInputMessage, setWsInputMessage,
+  } = useRequestContext();
 
   // --- Workspace Context Helpers ---
   const findParentWorkspace = (nodeId: string, nodes: CollectionNode[] = collection): CollectionNode | null => {
@@ -345,8 +238,6 @@ export default function App() {
     setShowNewWorkspaceInput(false);
   };
 
-  // Default to null to show welcome screen initially
-  const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
 
   // Tabs
   const [activeReqTab, setActiveReqTab] = useState<'auth' | 'headers' | 'body' | 'params' | 'queries'>('auth');
@@ -357,14 +248,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [copiedRes, setCopiedRes] = useState(false);
 
-  // Response and logs live outside the collection — not persisted to localStorage
-  const [activeResponse, setActiveResponse] = useState<SavedResponse | null>(null);
-  const [activeLogs, setActiveLogs] = useState<LogEntry[]>([]);
-
   // WS refs — declared here so switchActiveNode can reference them
   const wsInstRef = useRef<WebSocket | null>(null);
   const wsUnlistenRef = useRef<(() => void) | null>(null);
-  const [wsConnected, setWsConnected] = useState(false);
 
   const switchActiveNode = (nodeId: string | null) => {
     // Desconectar WS ao trocar de nó
@@ -539,16 +425,6 @@ export default function App() {
     document.body.classList.remove('dragging-active');
   };
 
-  const addLog = useCallback((type: LogEntry['type'], message: string, data?: any) => {
-    const newLog: LogEntry = { id: uuidv4(), timestamp: new Date(), type, message, data };
-    setActiveLogs(prev => [...prev, newLog]);
-  }, []);
-
-  // Persist State
-  useEffect(() => {
-    localStorage.setItem('aurafetch_collection_v2', JSON.stringify(collection));
-    localStorage.setItem('aurafetch_globals', JSON.stringify(globalVariables));
-  }, [collection, globalVariables]);
 
   // Loop Engine (Automation)
   useEffect(() => {
@@ -570,7 +446,7 @@ export default function App() {
         intervalRef.current = null;
       }
     };
-  }, [isLooping, intervalMs]);
+  }, [isLooping, intervalMs, addLog]);
 
   // Global Drag & Drop Fix for Tauri/Windows (WebView2)
   useEffect(() => {
@@ -1164,7 +1040,6 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
   };
 
   // WS State Reference
-  const [wsInputMessage, setWsInputMessage] = useState('');
   const webBinaryFileRef = useRef<HTMLInputElement>(null);
 
   const connectWs = async () => {
