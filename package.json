@@ -76,10 +76,15 @@
     "@tauri-apps/plugin-websocket": "^2.4.2",
     "@uiw/react-codemirror": "^4.25.5",
     "cm6-graphql": "^0.2.1",
+    "cronstrue": "^3.14.0",
     "graphql": "^16.13.1",
+    "js-yaml": "^4.1.1",
+    "jsbarcode": "^3.12.3",
     "lucide-react": "^0.575.0",
+    "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "spark-md5": "^3.0.2",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
@@ -87,6 +92,7 @@
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/cli": "^2.10.0",
     "@types/node": "^24.10.1",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",

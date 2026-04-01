@@ -1,0 +1,97 @@
+:root {
+  /* Premium Dark Theme Palette */
+  --bg-deep: #0a0a0f;
+  --bg-base: #12131c;
+  --bg-panel: rgba(26, 28, 41, 0.6);
+  --bg-panel-solid: #1a1c29;
+  --bg-panel-hover: rgba(43, 47, 68, 0.8);
+
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --border-glow: rgba(99, 102, 241, 0.3);
+
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  --accent-primary: #6366f1;
+  --accent-primary-hover: #818cf8;
+  --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+  --accent-glow: rgba(99, 102, 241, 0.4);
+
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: #3b82f6;
+
+  --success-bg: rgba(16, 185, 129, 0.12);
+  --danger-bg: rgba(239, 68, 68, 0.12);
+  --warning-bg: rgba(245, 158, 11, 0.12);
+
+  --radius-xs: 4px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 16px;
+
+  --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* LIGHT THEME */
+body.theme-light {
+  --bg-deep: #f8fafc;
+  --bg-base: #ffffff;
+  --bg-panel: rgba(255, 255, 255, 0.85);
+  --bg-panel-solid: #f1f5f9;
+  --bg-panel-hover: rgba(226, 232, 240, 0.8);
+
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.15);
+  --border-glow: rgba(99, 102, 241, 0.25);
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+
+  background-color: var(--bg-deep);
+  color: var(--text-primary);
+  background-image:
+    radial-gradient(circle at 0% 0%, rgba(99, 102, 241, 0.08), transparent 40%),
+    radial-gradient(circle at 100% 100%, rgba(168, 85, 247, 0.05), transparent 40%);
+}
+
+body.theme-light .glass-panel {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
+}
+
+body.theme-light .text-input,
+body.theme-light .select-input {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+body.theme-light .console-logs {
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+body.theme-light .cm-theme {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+body.theme-light .cm-activeLine {
+  background-color: rgba(0, 0, 0, 0.05) !important;
+}
+
+body.theme-light .cm-gutters {
+  background-color: #f1f5f9 !important;
+  color: #64748b !important;
+  border-right: 1px solid var(--border-subtle) !important;
+}
+
+body.theme-light select option {
+  background-color: #ffffff;
+  color: #0f172a;
+}

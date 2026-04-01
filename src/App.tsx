@@ -1,10 +1,13 @@
-import './index.css';
-import React, { useState, useRef, useEffect, Fragment } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useRequestContext } from './context/RequestContext';
+import { useCollection } from './hooks/useCollection';
+import { useEnvironment } from './hooks/useEnvironment';
+import { useRequest } from './hooks/useRequest';
+import { useWebSocket } from './hooks/useWebSocket';
 import {
   Folder, FileText, Plus, Download, Upload,
-  Play, Square, Trash2, Send, Clock, Edit2, FilePlus, Terminal, AlertTriangle,
-  ChevronRight, ChevronDown, Copy, Check, CopyPlus, Globe, Layers, MoreHorizontal, Database
+  Play, Square, Trash2, Send, Clock, Edit2, Terminal, AlertTriangle,
+  Copy, Check, Globe, Layers, Database
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import CodeMirror from '@uiw/react-codemirror';
@@ -12,13 +15,12 @@ import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { graphql } from 'cm6-graphql';
 import { oneDark } from '@codemirror/theme-one-dark';
-import WebSocket from '@tauri-apps/plugin-websocket';
-import { save as tauriSave, open as tauriOpen } from '@tauri-apps/plugin-dialog';
-import { writeFile as tauriWriteFile } from '@tauri-apps/plugin-fs';
+import { open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import { isTauri } from '@tauri-apps/api/core';
-import { safeFetch, readFileWithSizeGuard, MAX_FILE_UPLOAD_MB, MAX_FILE_UPLOAD_BYTES } from './utils/safeFetch';
+import { MAX_FILE_UPLOAD_MB, MAX_FILE_UPLOAD_BYTES } from './utils/safeFetch';
+import { Sidebar } from './components/layout/Sidebar';
 
-import type { HttpMethod, AuthType, RequestHeader, Environment, AuthConfig, RequestBodyType, RequestModel, SavedResponse, CollectionNode, LogEntry, HistoryEntry } from './types';
+import type { HttpMethod, AuthType, RequestHeader, AuthConfig, RequestBodyType, RequestModel, SavedResponse, CollectionNode, LogEntry } from './types';
 
 // Initial Data
 const defaultRequest: RequestModel = {
@@ -147,8 +149,6 @@ export default function App() {
   // ---------------------------------------------------------
   const {
     collection, setCollection,
-    sidebarTab, setSidebarTab,
-    treeSearchQuery, setTreeSearchQuery,
     globalVariables, setGlobalVariables,
     activeNodeId, setActiveNodeId,
     activeResponse, setActiveResponse,
@@ -157,86 +157,34 @@ export default function App() {
     wsInputMessage, setWsInputMessage,
   } = useRequestContext();
 
-  // --- Workspace Context Helpers ---
-  const findParentWorkspace = (nodeId: string, nodes: CollectionNode[] = collection): CollectionNode | null => {
-    for (const node of nodes) {
-      if (node.type === 'workspace') {
-        // Check if nodeId is this workspace or inside it
-        if (node.id === nodeId) return node;
-        if (node.children) {
-          const found = getActiveNode(node.children, nodeId);
-          if (found) return node;
-        }
-      }
-    }
-    return null;
+  // All state declarations BEFORE the hook
+
+  // ---------------------------------------------------------
+  // COLLECTION HOOK
+  // ---------------------------------------------------------
+  const { findParentWorkspace, addWorkspaceHistoryEntry,
+    updateNodeInCollection, importCollection: importCollectionHook, exportCollection: exportCollectionHook,
+    addRequestToFolder, addWebSocketToFolder, addFolderTo } = useCollection();
+
+  // Wrappers for import/export that match the hook's parameter expectations
+  const exportCollection = async () => {
+    await exportCollectionHook(globalVariables);
   };
 
-  const getActiveEnvironment = (nodeId: string): Environment | null => {
-    const ws = findParentWorkspace(nodeId);
-    if (!ws?.workspaceConfig) return null;
-    return ws.workspaceConfig.environments.find(e => e.id === ws.workspaceConfig!.activeEnvironmentId) || null;
+  const importCollection = (e: React.ChangeEvent<HTMLInputElement>) => {
+    importCollectionHook(e, setGlobalVariables, setActiveNodeId);
   };
 
-  const getWorkspaceEnvironments = (nodeId: string): Environment[] => {
-    const ws = findParentWorkspace(nodeId);
-    return ws?.workspaceConfig?.environments || [];
-  };
-
-  const getWorkspaceActiveEnvId = (nodeId: string): string | null => {
-    const ws = findParentWorkspace(nodeId);
-    return ws?.workspaceConfig?.activeEnvironmentId || null;
-  };
-
-  const setWorkspaceActiveEnvId = (wsId: string, envId: string | null) => {
-    updateNodeInCollection(wsId, (node) => {
-      if (node.type !== 'workspace' || !node.workspaceConfig) return node;
-      return {
-        ...node,
-        workspaceConfig: { ...node.workspaceConfig, activeEnvironmentId: envId }
-      };
-    });
-  };
-
-  const getWorkspaceHistory = (nodeId: string): HistoryEntry[] => {
-    const ws = findParentWorkspace(nodeId);
-    return ws?.workspaceConfig?.history || [];
-  };
-
-  const addWorkspaceHistoryEntry = (nodeId: string, entry: HistoryEntry) => {
-    const ws = findParentWorkspace(nodeId);
-    if (!ws) return;
-    updateNodeInCollection(ws.id, (node) => {
-      if (node.type !== 'workspace' || !node.workspaceConfig) return node;
-      return {
-        ...node,
-        workspaceConfig: {
-          ...node.workspaceConfig,
-          history: [entry, ...(node.workspaceConfig.history || [])].slice(0, 50)
-        }
-      };
-    });
-  };
-
-  const addWorkspace = () => {
-    if (!newWorkspaceName.trim()) return;
-    const name = newWorkspaceName.trim();
-    const newWs: CollectionNode = {
-      id: uuidv4(),
-      name,
-      type: 'workspace',
-      expanded: true,
-      workspaceConfig: {
-        environments: [{ id: uuidv4(), name: 'Produção', variables: [] }],
-        activeEnvironmentId: null,
-        history: []
-      },
-      children: [{ id: uuidv4(), name: 'Nova Pasta', type: 'folder', children: [], folderConfig: { auth: { type: 'none' } } }]
-    };
-    setCollection(prev => [...prev, newWs]);
-    setNewWorkspaceName('');
-    setShowNewWorkspaceInput(false);
-  };
+  // Environment hook
+  const {
+    getActiveEnvironment,
+    getWorkspaceEnvironments,
+    getWorkspaceActiveEnvId,
+    setWorkspaceActiveEnvId,
+    applyVariables,
+    addEnv: addEnvHook,
+    removeEnv: removeEnvHook,
+  } = useEnvironment();
 
 
   // Tabs
@@ -248,9 +196,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [copiedRes, setCopiedRes] = useState(false);
 
-  // WS refs — declared here so switchActiveNode can reference them
-  const wsInstRef = useRef<WebSocket | null>(null);
-  const wsUnlistenRef = useRef<(() => void) | null>(null);
+  const { wsInstRef, wsUnlistenRef } = useWebSocket();
 
   const switchActiveNode = (nodeId: string | null) => {
     // Desconectar WS ao trocar de nó
@@ -268,39 +214,13 @@ export default function App() {
     setActiveLogs([]);
   };
 
-  // Modals & States
-  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
-  const [openMenuNodeId, setOpenMenuNodeId] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState('');
-  const [nodeToDelete, setNodeToDelete] = useState<{ id: string, name: string } | null>(null);
-  const [showNewWorkspaceInput, setShowNewWorkspaceInput] = useState(false);
-  const [newWorkspaceName, setNewWorkspaceName] = useState('');
-
   // Timeouts & Abort Controllers
   const [reqTimeoutMs, setReqTimeoutMs] = useState<number>(30000);
   const abortControllerRef = useRef<AbortController | null>(null);
   const [showLoadingOverlay, setShowLoadingOverlay] = useState(false);
   const loadingOverlayTimer = useRef<number | null>(null);
 
-  const cancelReq = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      addLog('warn', '🚨 Requisição cancelada pelo usuário.');
-    }
-  };
 
-  // Fechar dropdown ao clicar fora
-  useEffect(() => {
-    if (!openMenuNodeId) return;
-    const close = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.tree-dropdown-menu') && !target.closest('.tree-item-menu-trigger')) {
-        setOpenMenuNodeId(null);
-      }
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [openMenuNodeId]);
 
   const [isEnvModalOpen, setIsEnvModalOpen] = useState(false);
   const [editingEnvId, setEditingEnvId] = useState<string | null>(null);
@@ -315,8 +235,6 @@ export default function App() {
   // Layout & Drag and Drop
   const [leftPanelWidth, setLeftPanelWidth] = useState(800);
   const isResizing = useRef(false);
-  const draggedNodeIdRef = useRef<string | null>(null);
-  const [dragOverInfo, setDragOverInfo] = useState<{ id: string, position: 'top' | 'bottom' | 'inside' } | null>(null);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -341,91 +259,6 @@ export default function App() {
     };
   }, []);
 
-  const handleDrop = (targetId: string | null, asChild: boolean, insertBefore: boolean = false) => {
-    const draggedId = draggedNodeIdRef.current;
-    if (!draggedId) {
-      return;
-    }
-
-    if (draggedId === targetId) {
-      draggedNodeIdRef.current = null;
-      document.body.classList.remove('dragging-active');
-      return;
-    }
-
-
-
-    setCollection(prev => {
-      // 1. Clonagem Profunda
-      const newCollection: CollectionNode[] = JSON.parse(JSON.stringify(prev));
-      let draggedNode: CollectionNode | null = null;
-
-      // 2. Auxiliar para remover o nó do lugar antigo
-      const findAndRemove = (list: CollectionNode[]): boolean => {
-        for (let i = 0; i < list.length; i++) {
-          if (list[i].id === draggedId) {
-            draggedNode = list.splice(i, 1)[0];
-            return true;
-          }
-          if (list[i].children) if (findAndRemove(list[i].children!)) return true;
-        }
-        return false;
-      };
-
-      // 3. Auxiliar para verificar se o alvo está DENTRO do que está sendo arrastado (Evita loop infinito)
-      const isTargetInsideDragged = (node: CollectionNode): boolean => {
-        if (node.id === targetId) return true;
-        if (node.children) {
-          return node.children.some(child => isTargetInsideDragged(child));
-        }
-        return false;
-      };
-
-      // Pegamos o nó real que está sendo arrastado para o check de parentesco
-      const sourceNode = getActiveNode(prev, draggedId);
-      if (sourceNode && targetId && isTargetInsideDragged(sourceNode)) {
-        addLog('error', "❌ Operação inválida: Não é possível mover uma pasta para dentro de si mesma ou de seus filhos.");
-        return prev;
-      }
-
-      // Agora removemos e reinserimos
-      findAndRemove(newCollection);
-      if (!draggedNode) return prev;
-
-      const nodeToMove: CollectionNode = draggedNode;
-
-      // 4. Inserção no novo lugar
-      if (!targetId) {
-        newCollection.push(nodeToMove);
-      } else {
-        const findAndInsert = (list: CollectionNode[]): boolean => {
-          for (let i = 0; i < list.length; i++) {
-            if (list[i].id === targetId) {
-              if (asChild && (list[i].type === 'folder' || list[i].type === 'workspace')) {
-                list[i].children = [...(list[i].children || []), nodeToMove];
-                list[i].expanded = true;
-              } else {
-                const index = insertBefore ? i : i + 1;
-                list.splice(index, 0, nodeToMove);
-              }
-              return true;
-            }
-            if (list[i].children) if (findAndInsert(list[i].children!)) return true;
-          }
-          return false;
-        };
-        findAndInsert(newCollection);
-      }
-
-      addLog('success', `📦 Movido: ${nodeToMove.name} para ${targetId ? 'nova posição' : 'Raiz'}`);
-      return newCollection;
-    });
-
-    draggedNodeIdRef.current = null;
-    document.body.classList.remove('dragging-active');
-  };
-
-
   // Loop Engine (Automation)
   useEffect(() => {
     if (isLooping) {
@@ -448,35 +281,6 @@ export default function App() {
     };
   }, [isLooping, intervalMs, addLog]);
 
-  // Global Drag & Drop Fix for Tauri/Windows (WebView2)
-  useEffect(() => {
-    const handleGlobalDragOver = (e: DragEvent) => {
-      if (draggedNodeIdRef.current) {
-        e.preventDefault();
-        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-      }
-    };
-    const handleGlobalDrop = (e: DragEvent) => {
-      if (draggedNodeIdRef.current) {
-        // Se cair fora de um alvo específico, o container da árvore ou o window limpam
-        // Mas deixamos os handlers específicos cuidarem da lógica de negócio
-        // Aqui apenas garantimos que o estado de arraste suma
-        if (e.target === window || (e.target as HTMLElement).closest('.main-content')) {
-          draggedNodeIdRef.current = null;
-          document.body.classList.remove('dragging-active');
-          document.querySelectorAll('.is-dragging').forEach(el => el.classList.remove('is-dragging'));
-          document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-        }
-      }
-    };
-
-    window.addEventListener('dragover', handleGlobalDragOver);
-    window.addEventListener('drop', handleGlobalDrop);
-    return () => {
-      window.removeEventListener('dragover', handleGlobalDragOver);
-      window.removeEventListener('drop', handleGlobalDrop);
-    };
-  }, []);
 
   const handleSendRef = useRef<() => void>(undefined);
   useEffect(() => {
@@ -506,21 +310,6 @@ export default function App() {
 
   const activeNode = getActiveNode(collection, activeNodeId);
   const activeReq = activeNode?.type === 'request' ? activeNode.request! : null;
-
-  const updateNodeInCollection = (nodeId: string, updater: (node: CollectionNode) => CollectionNode) => {
-    setCollection(prev => {
-      const update = (nodes: CollectionNode[]): CollectionNode[] => {
-        return nodes.map(node => {
-          if (node.id === nodeId) {
-            return updater(node);
-          }
-          if (node.children) return { ...node, children: update(node.children) };
-          return node;
-        });
-      };
-      return update(prev);
-    });
-  };
 
   const handleActiveReqChange = (updates: Partial<RequestModel> & { savedResponse?: SavedResponse | null; savedLogs?: LogEntry[] }) => {
     if (!activeNodeId) return;
@@ -564,392 +353,45 @@ export default function App() {
     });
   };
 
-  const toggleFolder = (nodeId: string) => {
-    const updateNode = (nodes: CollectionNode[]): CollectionNode[] => nodes.map(node => {
-      if (node.id === nodeId) return { ...node, expanded: !node.expanded };
-      if (node.children) return { ...node, children: updateNode(node.children) };
-      return node;
-    });
-    setCollection(updateNode(collection));
-  };
+  // Call useRequest hook with all dependencies
+  const {
+    handleSend,
+    cancelReq,
+    resolveAuth,
+    resolveHeaders,
+    runFolderScript,
+    downloadResponse,
+    copyResponse,
+    generateCrudExample,
+  } = useRequest({
+    collection,
+    activeNodeId,
+    activeReq,
+    getActiveNode,
+    handleActiveReqChange,
+    setLoading,
+    setShowLoadingOverlay,
+    reqTimeoutMs,
+    setActiveResTab,
+    setCopiedRes,
+    findParentWorkspace,
+    getActiveEnvironment,
+    updateNodeInCollection,
+    setGlobalVariables,
+    switchActiveNode,
+    setCollection,
+    addWorkspaceHistoryEntry,
+    defaultRequest,
+    defaultFolderAuth,
+    activeResponse,
+    abortControllerRef,
+    loadingOverlayTimer,
+    handleSendRef,
+  });
 
-  const addFolderTo = (parentId: string) => {
-    const newFolder: CollectionNode = {
-      id: uuidv4(),
-      name: 'Nova Pasta',
-      type: 'folder',
-      expanded: true,
-      children: [],
-      folderConfig: { auth: { ...defaultFolderAuth }, variables: [] }
-    };
-    const updateNode = (nodes: CollectionNode[]): CollectionNode[] => nodes.map(node => {
-      if (node.id === parentId) {
-        return { ...node, expanded: true, children: [...(node.children || []), newFolder] };
-      }
-      if (node.children) return { ...node, children: updateNode(node.children) };
-      return node;
-    });
-    setCollection(updateNode(collection));
-    switchActiveNode(newFolder.id);
-    addLog('info', '📁 Nova pasta criada');
-  };
-
-  const generateCrudExample = () => {
-    const authSetupScript = `// Exemplo prático de Login na API:
-const res = await tauriFetch("{{base_url}}/auth/login", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ email: "admin@empresa.com", password: "senha123" })
-});
-const data = await res.json();
-aurafetch.setEnv("token_acesso", data.token);
-aurafetch.log("Token renovado e salvo na pasta!");`;
-
-    const envDevId = uuidv4();
-    const envProdId = uuidv4();
-
-    const workspaceId = uuidv4();
-    const folderId = uuidv4();
-
-    const newWorkspace: CollectionNode = {
-      id: workspaceId,
-      name: 'Workspace de Exemplo (CRUD)',
-      type: 'workspace',
-      expanded: true,
-      workspaceConfig: {
-        activeEnvironmentId: envDevId,
-        history: [],
-        environments: [
-          {
-            id: envDevId,
-            name: 'DEV (LocalHost)',
-            variables: [
-              { id: uuidv4(), key: 'base_url', value: 'http://127.0.0.1:3333' },
-              { id: uuidv4(), key: 'token_acesso', value: '' }
-            ]
-          },
-          {
-            id: envProdId,
-            name: 'PROD (Nuvem)',
-            variables: [
-              { id: uuidv4(), key: 'base_url', value: 'https://api.empresa.com.br' },
-              { id: uuidv4(), key: 'token_acesso', value: '' }
-            ]
-          }
-        ]
-      },
-      children: [
-        {
-          id: folderId,
-          name: 'API (Módulo de Usuários)',
-          type: 'folder',
-          expanded: true,
-          folderConfig: {
-            auth: {
-              type: 'bearer',
-              token: '{{token_acesso}}',
-              username: '',
-              password: ''
-            },
-            variables: [], // Variáveis limpas na pasta para herdar do ambiente
-            setupScript: authSetupScript
-          },
-          children: [
-            {
-              id: uuidv4(),
-              name: '1. Listar (GET)',
-              type: 'request',
-              request: {
-                ...defaultRequest,
-                id: uuidv4(),
-                name: '1. Listar (GET)',
-                method: 'GET',
-                url: '{{base_url}}/users'
-              }
-            },
-            {
-              id: uuidv4(),
-              name: '2. Exibir por ID (GET)',
-              type: 'request',
-              request: {
-                ...defaultRequest,
-                id: uuidv4(),
-                name: '2. Exibir por ID (GET)',
-                method: 'GET',
-                url: '{{base_url}}/users/:id',
-                params: [{ id: uuidv4(), key: 'id', value: '1', enabled: true }]
-              }
-            },
-            {
-              id: uuidv4(),
-              name: '3. Salvar (POST)',
-              type: 'request',
-              request: {
-                ...defaultRequest,
-                id: uuidv4(),
-                name: '3. Salvar (POST)',
-                method: 'POST',
-                url: '{{base_url}}/users',
-                bodyType: 'json',
-                body: '{\n  "name": "João Silva",\n  "email": "joao@email.com",\n  "role": "admin"\n}'
-              }
-            },
-            {
-              id: uuidv4(),
-              name: '4. Editar (PUT)',
-              type: 'request',
-              request: {
-                ...defaultRequest,
-                id: uuidv4(),
-                name: '4. Editar (PUT)',
-                method: 'PUT',
-                url: '{{base_url}}/users/:id',
-                params: [{ id: uuidv4(), key: 'id', value: '1', enabled: true }],
-                bodyType: 'json',
-                body: '{\n  "role": "manager"\n}'
-              }
-            },
-            {
-              id: uuidv4(),
-              name: '5. Deletar (DELETE)',
-              type: 'request',
-              request: {
-                ...defaultRequest,
-                id: uuidv4(),
-                name: '5. Deletar (DELETE)',
-                method: 'DELETE',
-                url: '{{base_url}}/users/:id',
-                params: [{ id: uuidv4(), key: 'id', value: '1', enabled: true }]
-              }
-            }
-          ]
-        }
-      ]
-    };
-
-    setCollection(prev => [...prev, newWorkspace]);
-    switchActiveNode(workspaceId);
-    addLog('success', '📦 Nova Workspace de Exemplo criada com ambientes Prod/Dev e CRUD completo');
-  };
-
-  const addRequestToFolder = (folderId: string) => {
-    const req = { ...defaultRequest, id: uuidv4(), name: 'Nova Rota' };
-    const newNode: CollectionNode = { id: req.id, name: req.name, type: 'request', request: req };
-
-    const updateNode = (nodes: CollectionNode[]): CollectionNode[] => nodes.map(node => {
-      if (node.id === folderId) {
-        return { ...node, expanded: true, children: [...(node.children || []), newNode] };
-      }
-      if (node.children) return { ...node, children: updateNode(node.children) };
-      return node;
-    });
-    setCollection(updateNode(collection));
-    switchActiveNode(req.id);
-    addLog('success', '📄 Nova rota adicionada ao agrupador.');
-  };
-
-  const addWebSocketToFolder = (folderId: string) => {
-    const wsReq = {
-      ...defaultRequest,
-      id: uuidv4(),
-      name: 'Conexão WebSocket',
-      method: 'WS' as HttpMethod,
-      url: 'wss://echo.websocket.org',
-      bodyType: 'ws' as RequestBodyType,
-      wsMessages: []
-    };
-    const newNode: CollectionNode = { id: wsReq.id, name: wsReq.name, type: 'request', request: wsReq };
-
-    const updateNode = (nodes: CollectionNode[]): CollectionNode[] => nodes.map(node => {
-      if (node.id === folderId || node.id === folderId.replace('-ws', '')) {
-        return { ...node, expanded: true, children: [...(node.children || []), newNode] };
-      }
-      if (node.children) return { ...node, children: updateNode(node.children) };
-      return node;
-    });
-    setCollection(updateNode(collection));
-    switchActiveNode(wsReq.id);
-    addLog('info', '🌐 Nova conexão WebSocket adicionada.');
-  };
-
-  const cloneRequest = (nodeId: string) => {
-    const nodeToClone = getActiveNode(collection, nodeId);
-    if (!nodeToClone || nodeToClone.type !== 'request' || !nodeToClone.request) return;
-
-    const id = uuidv4();
-    const clonedReq = { ...nodeToClone.request, id, name: `${nodeToClone.name} (Cópia)` };
-    const newNode: CollectionNode = { id, name: clonedReq.name, type: 'request', request: clonedReq };
-
-    let attached = false;
-    const updateNode = (nodes: CollectionNode[]): CollectionNode[] => nodes.map(node => {
-      if (node.children && node.children.some(c => c.id === nodeId)) {
-        attached = true;
-        const idx = node.children.findIndex(c => c.id === nodeId);
-        const newChildren = [...node.children];
-        newChildren.splice(idx + 1, 0, newNode);
-        return { ...node, children: newChildren };
-      }
-      if (node.children) return { ...node, children: updateNode(node.children) };
-      return node;
-    });
-
-    const newColl = updateNode(collection);
-    if (!attached) {
-      const idx = newColl.findIndex(n => n.id === nodeId);
-      newColl.splice(idx + 1, 0, newNode);
-    }
-
-    setCollection(newColl);
-    switchActiveNode(id);
-    addLog('success', `📄 Requisição clonada: ${clonedReq.name}`);
-  };
-
-  const confirmDelete = () => {
-    if (!nodeToDelete) return;
-    const nodeId = nodeToDelete.id;
-
-    const removeNode = (nodes: CollectionNode[]): CollectionNode[] => {
-      return nodes.filter(node => {
-        if (node.id === nodeId) return false;
-        if (node.children) {
-          node.children = removeNode(node.children);
-        }
-        return true;
-      });
-    };
-
-    setCollection(removeNode(collection));
-    addLog('warn', `🗑️ Item deletado: ${nodeToDelete.name}`);
-
-    if (activeNodeId === nodeId) {
-      switchActiveNode(null);
-    }
-
-    setNodeToDelete(null);
-  };
-
-  const startRename = (nodeId: string, currentName: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEditingNodeId(nodeId);
-    setEditingName(currentName);
-  };
-
-  const commitRename = (nodeId: string) => {
-    if (!editingName.trim()) {
-      setEditingNodeId(null);
-      return;
-    }
-    const updateNode = (nodes: CollectionNode[]): CollectionNode[] => nodes.map(node => {
-      if (node.id === nodeId) {
-        if (node.type === 'request' && node.request) {
-          addLog('info', `✏️ Requisição renomeada para "${editingName.trim()}"`);
-          return { ...node, name: editingName.trim(), request: { ...node.request, name: editingName.trim() } };
-        }
-        addLog('info', `✏️ Agrupador renomeado para "${editingName.trim()}"`);
-        return { ...node, name: editingName.trim() };
-      }
-      if (node.children) return { ...node, children: updateNode(node.children) };
-      return node;
-    });
-    setCollection(updateNode(collection));
-    setEditingNodeId(null);
-  };
 
   // --- VARIABLES ENGINE (HIERARCHY RESOLUTION) ---
-  const applyVariables = (text: string, targetNodeId: string): string => {
-    if (!text || typeof text !== 'string') return text;
 
-    // Helper to find path to node
-    const getPath = (current: CollectionNode[], id: string, currentPath: CollectionNode[]): CollectionNode[] | null => {
-      for (const node of current) {
-        if (node.id === id) return [...currentPath, node];
-        if (node.children) {
-          const path = getPath(node.children, id, [...currentPath, node]);
-          if (path) return path;
-        }
-      }
-      return null;
-    };
-
-    let result = text;
-    let iterations = 0;
-    const MAX_ITERATIONS = 5;
-
-    const path = getPath(collection, targetNodeId, []);
-    const activeEnv = getActiveEnvironment(targetNodeId);
-
-    while (result.includes('{{') && iterations < MAX_ITERATIONS) {
-      const nextResult = result.replace(/\{\{([^}]+)\}\}/g, (match, key) => {
-        const trimmedKey = key.trim();
-
-        // 1. Check Folder Hierarchy (Bottom-Up)
-        if (path) {
-          for (let i = path.length - 1; i >= 0; i--) {
-            const node = path[i];
-            if (node.type === 'folder' && node.folderConfig?.variables) {
-              const v = node.folderConfig.variables.find(v => v.key === trimmedKey);
-              if (v) return String(v.value ?? '');
-            }
-          }
-        }
-
-        // 2. Check Active Environment
-        if (activeEnv) {
-          const envVar = activeEnv.variables.find(v => v.key === trimmedKey);
-          if (envVar) return String(envVar.value ?? '');
-        }
-
-        // 3. Check Global Variables
-        const gv = globalVariables.find(v => v.key === trimmedKey);
-        if (gv) return String(gv.value ?? '');
-
-        return match;
-      });
-
-      if (nextResult === result) break;
-      result = nextResult;
-      iterations++;
-    }
-    return result;
-  };
-
-  const resolveAuth = (targetNodeId: string, nodes: CollectionNode[], currentParentAuth: AuthConfig = { type: 'none' }): AuthConfig | null => {
-    for (const node of nodes) {
-      if (node.id === targetNodeId) {
-        if (node.type === 'request') {
-          const reqAuth = node.request?.auth;
-          if (reqAuth?.type === 'inherit') return currentParentAuth;
-          return reqAuth || { type: 'none' };
-        }
-        return node.folderConfig?.auth || currentParentAuth;
-      }
-      if (node.children) {
-        const folderAuth = node.folderConfig?.auth;
-        let nextAuth = currentParentAuth;
-        if (folderAuth && folderAuth.type !== 'none' && folderAuth.type !== 'inherit') {
-          nextAuth = folderAuth;
-        }
-        const found = resolveAuth(targetNodeId, node.children, nextAuth);
-        if (found) return found;
-      }
-    }
-    return null;
-  };
-
-  const resolveHeaders = (targetNodeId: string, nodes: CollectionNode[], currentParentHeaders: RequestHeader[] = []): RequestHeader[] => {
-    for (const node of nodes) {
-      if (node.id === targetNodeId) {
-        return [...currentParentHeaders, ...(node.type === 'folder' ? (node.folderConfig?.headers || []) : [])];
-      }
-      if (node.children) {
-        const folderHeaders = node.folderConfig?.headers || [];
-        const nextHeaders = [...currentParentHeaders, ...folderHeaders];
-        const found = resolveHeaders(targetNodeId, node.children, nextHeaders);
-        if (found) return found;
-      }
-    }
-    return [];
-  };
 
   const generateCodeSnippet = (req: RequestModel, lang: string): string => {
     let targetUrl = applyVariables(req.url, req.id);
@@ -1041,716 +483,22 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
 
   // WS State Reference
   const webBinaryFileRef = useRef<HTMLInputElement>(null);
+  const { sendWsMessage: sendWsMessageRaw } = useWebSocket();
 
-  const connectWs = async () => {
-    if (!activeReq || !activeNodeId) return;
-    setLoading(true);
-    const targetUrl = applyVariables(activeReq.url, activeReq.id);
-    addLog('info', `🔌 Tentando conectar WebSocket em: ${targetUrl}`);
-
-    try {
-      // Remove listener anterior se existir
-      if (wsUnlistenRef.current) {
-        wsUnlistenRef.current();
-        wsUnlistenRef.current = null;
-      }
-
-      const ws = await WebSocket.connect(targetUrl);
-      wsInstRef.current = ws;
-      setWsConnected(true);
-
-      const nodeId = activeNodeId;
-
-      handleActiveReqChange({
-        wsMessages: [{ id: uuidv4(), type: 'info', text: 'Conectado a ' + targetUrl, timestamp: Date.now() }]
-      });
-
-      // addListener retorna () => void — a função de cleanup
-      wsUnlistenRef.current = ws.addListener((msg) => {
-        let textData = '';
-        if (msg.type === 'Text') textData = msg.data as string;
-        else if (msg.type === 'Binary') textData = '[Binary Message]';
-
-        // Usar setCollection com updater funcional para evitar stale closure
-        setCollection(prev => {
-          const update = (nodes: CollectionNode[]): CollectionNode[] =>
-            nodes.map(node => {
-              if (node.id === nodeId && node.type === 'request' && node.request) {
-                return {
-                  ...node,
-                  request: {
-                    ...node.request,
-                    wsMessages: [
-                      ...(node.request.wsMessages || []),
-                      { id: uuidv4(), type: 'received' as const, text: textData, timestamp: Date.now() }
-                    ]
-                  }
-                };
-              }
-              if (node.children) return { ...node, children: update(node.children) };
-              return node;
-            });
-          return update(prev);
-        });
-
-        addLog('info', `📨 WS recebido: ${textData.substring(0, 100)}${textData.length > 100 ? '...' : ''}`);
-      });
-
-    } catch (err: any) {
-      addLog('error', `❌ Falha ao conectar WS: ${err.message || err.toString()}`);
-    } finally {
-      setLoading(false);
+  const sendWsMessage = () => {
+    if (activeReq) {
+      sendWsMessageRaw(activeReq, handleActiveReqChange);
     }
   };
 
-  const disconnectWs = async () => {
-    if (wsUnlistenRef.current) {
-      wsUnlistenRef.current();
-      wsUnlistenRef.current = null;
-    }
-    if (wsInstRef.current) {
-      await wsInstRef.current.disconnect();
-      wsInstRef.current = null;
-      setWsConnected(false);
-      handleActiveReqChange({
-        wsMessages: [...(activeReq!.wsMessages || []), { id: uuidv4(), type: 'info', text: 'Desconectado', timestamp: Date.now() }]
-      });
-      addLog('info', '🔌 WebSocket Desconectado');
-    }
-  };
-
-  const sendWsMessage = async () => {
-    if (wsInstRef.current && wsConnected && wsInputMessage.trim()) {
-      await wsInstRef.current.send(wsInputMessage);
-      handleActiveReqChange({
-        wsMessages: [...(activeReq!.wsMessages || []), { id: uuidv4(), type: 'sent', text: wsInputMessage, timestamp: Date.now() }]
-      });
-      setWsInputMessage('');
-    }
-  };
-
-  const handleSend = async () => {
-    if (!activeReq) return;
-    if (activeReq.method === 'WS') {
-      if (wsConnected) await disconnectWs();
-      else await connectWs();
-      return;
-    }
-
-    setLoading(true);
-    setCopiedRes(false);
-    
-    abortControllerRef.current = new AbortController();
-    setShowLoadingOverlay(false);
-    if (loadingOverlayTimer.current) clearTimeout(loadingOverlayTimer.current);
-    
-    // Configura um timer global na request para só exibir que tá carregando visualmente pesadão após 3 secs
-    loadingOverlayTimer.current = window.setTimeout(() => {
-      setShowLoadingOverlay(true);
-    }, 3000);
-
-    const startTime = Date.now();
-
-    // Use activeNodeId which is more reliable for path finding in Tree
-    const nodeId = activeNodeId || activeReq.id;
-    const parentWs = findParentWorkspace(nodeId);
-    const activeEnv = getActiveEnvironment(nodeId);
-    
-    if (activeEnv) {
-      addLog('info', `🌍 [Ambiente: ${activeEnv.name}] resolvendo variáveis para o disparo...`);
-    } else if (parentWs) {
-      addLog('warn', `⚠️ [Aviso] Nenhum Ambiente ATIVO selecionado no Workspace "${parentWs.name}". Variáveis do ambiente não serão resolvidas.`);
-    } else {
-      addLog('error', `❌ [Erro de Escopo] Não foi possível localizar o Workspace para a requisição selecionada. As variáveis não serão carregadas.`);
-    }
-
-    // Apply Vars to URL
-    let targetUrl = applyVariables(activeReq.url, nodeId);
-
-    // 1. Resolve Path Params
-    (activeReq.params || []).forEach(p => {
-      if (p.enabled && p.key.trim()) {
-        const key = p.key.trim();
-        const value = applyVariables(p.value.trim(), activeReq.id);
-        // Replace :key or {key}
-        targetUrl = targetUrl.replace(new RegExp(`:${key}`, 'g'), value);
-        targetUrl = targetUrl.replace(new RegExp(`{${key}}`, 'g'), value);
-      }
-    });
-
-      // 2. Resolve Query Params
-      try {
-        const queryParts = (activeReq.queryParams || [])
-          .filter(q => q.enabled && q.key.trim())
-          .map(q => `${encodeURIComponent(applyVariables(q.key.trim(), activeReq.id))}=${encodeURIComponent(applyVariables(q.value.trim(), activeReq.id))}`);
-
-        if (queryParts.length > 0) {
-          const separator = targetUrl.includes('?') ? '&' : '?';
-          targetUrl += separator + queryParts.join('&');
-        }
-      } catch (e) {
-        // Fallback
-      }
-
-    addLog('info', ` INICIANDO REQUISIÇÃO: ${activeReq.method} ${targetUrl}`);
-
-    try {
-      const fetchHeaders: HeadersInit = {};
-
-      // 1. Resolve Inherited Headers from Folders
-      const inheritedHeaders = resolveHeaders(activeReq.id, collection);
-      inheritedHeaders.forEach(h => {
-        if (h.enabled && h.key.trim() && h.value.trim()) {
-          fetchHeaders[applyVariables(h.key.trim(), activeReq.id)] = applyVariables(h.value.trim(), activeReq.id);
-        }
-      });
-
-      // 2. Apply Request Specific Headers (overwrites folder headers)
-      activeReq.headers.forEach(h => {
-        if (h.enabled && h.key.trim() && h.value.trim()) {
-          fetchHeaders[applyVariables(h.key.trim(), activeReq.id)] = applyVariables(h.value.trim(), activeReq.id);
-        }
-      });
-
-      const resolvedAuth = resolveAuth(activeReq.id, collection);
-      let finalTargetUrl = targetUrl;
-
-      if (resolvedAuth) {
-        if (resolvedAuth.type === 'bearer' && resolvedAuth.token) {
-          fetchHeaders['Authorization'] = `Bearer ${applyVariables(resolvedAuth.token, activeReq.id)}`;
-        }
-        else if (resolvedAuth.type === 'oauth2' && resolvedAuth.oauth2Config?.accessToken) {
-          fetchHeaders['Authorization'] = `Bearer ${applyVariables(resolvedAuth.oauth2Config.accessToken, activeReq.id)}`;
-        }
-        else if (resolvedAuth.type === 'basic' && resolvedAuth.username) {
-          const userStr = applyVariables(resolvedAuth.username, activeReq.id);
-          const passStr = applyVariables(resolvedAuth.password || '', activeReq.id);
-          const b64 = btoa(`${userStr}:${passStr}`);
-          fetchHeaders['Authorization'] = `Basic ${b64}`;
-        }
-        else if (resolvedAuth.type === 'apikey' && resolvedAuth.apiKeyKey && resolvedAuth.apiKeyValue) {
-          const keyStr = applyVariables(resolvedAuth.apiKeyKey, activeReq.id);
-          const valStr = applyVariables(resolvedAuth.apiKeyValue, activeReq.id);
-          if (resolvedAuth.apiKeyIn === 'header') {
-            fetchHeaders[keyStr] = valStr;
-          } else {
-            const separator = finalTargetUrl.includes('?') ? '&' : '?';
-            finalTargetUrl += `${separator}${encodeURIComponent(keyStr)}=${encodeURIComponent(valStr)}`;
-          }
-        }
-      }
-
-      const opts: RequestInit & { signal?: AbortSignal } = {
-        method: activeReq.method,
-        headers: fetchHeaders,
-        signal: abortControllerRef.current?.signal
-      };
-
-      // 3. Construct Request Body based on bodyType
-      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(activeReq.method) && activeReq.bodyType !== 'none') {
-        if (activeReq.bodyType === 'json' && activeReq.body) {
-          opts.body = applyVariables(activeReq.body, activeReq.id);
-          const hasContentType = Object.keys(fetchHeaders).some(k => k.toLowerCase() === 'content-type');
-          if (!hasContentType) fetchHeaders['Content-Type'] = 'application/json';
-        }
-        else if (activeReq.bodyType === 'graphql' && activeReq.graphqlQuery) {
-          const bodyPayload = {
-            query: applyVariables(activeReq.graphqlQuery, activeReq.id),
-            variables: activeReq.graphqlVariables ? JSON.parse(applyVariables(activeReq.graphqlVariables, activeReq.id)) : {}
-          };
-          opts.body = JSON.stringify(bodyPayload);
-          const hasContentType = Object.keys(fetchHeaders).some(k => k.toLowerCase() === 'content-type');
-          if (!hasContentType) fetchHeaders['Content-Type'] = 'application/json';
-        }
-        else if (activeReq.bodyType === 'urlencoded') {
-          const params = new URLSearchParams();
-          activeReq.formData.forEach(f => {
-            if (f.enabled && f.key) params.append(applyVariables(f.key, activeReq.id), applyVariables(f.value, activeReq.id));
-          });
-          opts.body = params.toString();
-          const hasContentType = Object.keys(fetchHeaders).some(k => k.toLowerCase() === 'content-type');
-          if (!hasContentType) fetchHeaders['Content-Type'] = 'application/x-www-form-urlencoded';
-        }
-        else if (activeReq.bodyType === 'binary' && activeReq.binaryFile) {
-          let bytes: Uint8Array<ArrayBuffer>;
-          if (!isTauri() && activeReq.webBinaryFile) {
-            if (activeReq.webBinaryFile.size > MAX_FILE_UPLOAD_BYTES) {
-              throw new Error(`Arquivo "${activeReq.webBinaryFile.name}" excede o limite de ${MAX_FILE_UPLOAD_MB}MB`);
-            }
-            bytes = new Uint8Array(await activeReq.webBinaryFile.arrayBuffer()) as Uint8Array<ArrayBuffer>;
-          } else {
-            bytes = await readFileWithSizeGuard(activeReq.binaryFile.path, activeReq.binaryFile.name);
-          }
-          opts.body = bytes;
-          const hasContentType = Object.keys(fetchHeaders).some(k => k.toLowerCase() === 'content-type');
-          if (!hasContentType) fetchHeaders['Content-Type'] = 'application/octet-stream';
-        }
-        else if (activeReq.bodyType === 'form-data') {
-          const fd = new FormData();
-          for (const f of activeReq.formData) {
-            if (!f.enabled || !f.key) continue;
-            const key = applyVariables(f.key, activeReq.id);
-            if (f.type === 'text') {
-              fd.append(key, applyVariables(f.value, activeReq.id));
-            } else if (f.fileInfo) {
-              let bytes: Uint8Array<ArrayBuffer>;
-              if (!isTauri() && f.webFile) {
-                if (f.webFile.size > MAX_FILE_UPLOAD_BYTES) {
-                  throw new Error(`Arquivo "${f.webFile.name}" excede o limite de ${MAX_FILE_UPLOAD_MB}MB`);
-                }
-                bytes = new Uint8Array(await f.webFile.arrayBuffer()) as Uint8Array<ArrayBuffer>;
-              } else {
-                bytes = await readFileWithSizeGuard(f.fileInfo.path, f.fileInfo.name);
-              }
-              fd.append(key, new Blob([bytes], { type: 'application/octet-stream' }), f.fileInfo.name);
-            }
-          }
-          opts.body = fd;
-          // Remove any manually set Content-Type header so the boundary is generated correctly
-          const contentHeader = Object.keys(fetchHeaders).find(k => k.toLowerCase() === 'content-type');
-          if (contentHeader) delete fetchHeaders[contentHeader];
-        }
-      }
-
-      if (!finalTargetUrl.startsWith('http') && !finalTargetUrl.includes('://')) {
-        // Simple heuristic for URLs that might be missing protocol or variables not replaced correctly
-        if (!finalTargetUrl.startsWith('{{')) {
-          throw new Error('A URL resolvida aparentemente é inválida: ' + finalTargetUrl);
-        }
-      }
-
-      const reqOutput: any = {
-        Method: activeReq.method,
-        URL: finalTargetUrl,
-        Headers: fetchHeaders
-      };
-
-      if (opts.body) {
-        let parsedBody = opts.body;
-        try { parsedBody = JSON.parse(opts.body as string); } catch { }
-        reqOutput.Body = parsedBody;
-      }
-
-      addLog('log', `▶️ REQ OUT: Request Packet -> ${finalTargetUrl}`, reqOutput);
-
-      const fetchTimeoutId = setTimeout(() => {
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort('Timeout configurável excedido');
-        }
-      }, reqTimeoutMs);
-
-      const res = await safeFetch(finalTargetUrl, opts);
-      clearTimeout(fetchTimeoutId);
-
-      const contentType = res.headers.get('content-type') || '';
-      let data: any;
-      let responseType: 'json' | 'image' | 'pdf' | 'html' | 'text' | 'binary' = 'text';
-
-      if (contentType.includes('image/')) {
-        const buffer = await res.arrayBuffer();
-        const b64 = btoa(
-          new Uint8Array(buffer)
-            .reduce((acc, byte) => acc + String.fromCharCode(byte), '')
-        );
-        data = `data:${contentType};base64,${b64}`;
-        responseType = 'image';
-      } else if (contentType.includes('application/pdf')) {
-        const buffer = await res.arrayBuffer();
-        const b64 = btoa(
-          new Uint8Array(buffer)
-            .reduce((acc, byte) => acc + String.fromCharCode(byte), '')
-        );
-        data = `data:${contentType};base64,${b64}`;
-        responseType = 'pdf';
-      } else {
-        const isText = contentType.includes('text/') ||
-          contentType.includes('application/json') ||
-          contentType.includes('application/xml') ||
-          contentType.includes('application/javascript');
-
-        if (!isText && (contentType.includes('application/') || contentType.includes('font/'))) {
-          // It's a binary file (ZIP, Font, EXE, etc.)
-          data = "[Arquivo Binário]";
-          responseType = 'binary';
-        } else {
-          const text = await res.text();
-          if (contentType.includes('application/json')) {
-            try {
-              data = JSON.parse(text);
-              responseType = 'json';
-            } catch {
-              data = text;
-              responseType = 'text';
-            }
-          } else if (contentType.includes('text/html')) {
-            data = text;
-            responseType = 'html';
-          } else {
-            try {
-              data = JSON.parse(text);
-              responseType = 'json';
-            } catch {
-              data = text || "(Sem corpo / Resposta vazia)";
-              responseType = 'text';
-            }
-          }
-        }
-      }
-
-      const timeMs = Date.now() - startTime;
-
-      const responseHeaders: Record<string, string> = {};
-      res.headers.forEach((val, key) => responseHeaders[key] = val);
-
-      const savedResponse = {
-        status: res.status,
-        statusText: res.statusText,
-        data,
-        time: timeMs,
-        type: responseType,
-        contentType,
-        headers: responseHeaders
-      };
-
-      handleActiveReqChange({ savedResponse });
-
-      const newHistoryEntry: HistoryEntry = {
-        id: uuidv4(),
-        requestId: activeReq.id,
-        requestName: activeReq.name,
-        method: activeReq.method,
-        url: targetUrl,
-        timestamp: new Date().toISOString(),
-        status: res.status
-      };
-      addWorkspaceHistoryEntry(activeReq.id, newHistoryEntry);
-
-      const resOutput: any = {
-        Status: `${res.status} ${res.statusText || ''}`.trim(),
-        Time: `${timeMs}ms`,
-        Headers: responseHeaders,
-        Type: responseType,
-        Body: responseType === 'image' || responseType === 'pdf' ? '[Binary Content]' : data
-      };
-
-      const statusLog = res.status >= 200 && res.status < 300 ? 'success' : 'warn';
-      const statusText = res.statusText ? ` ${res.statusText}` : '';
-      addLog(statusLog, `◀️ RES IN: HTTP ${res.status}${statusText} [Tempo: ${timeMs}ms]`, resOutput);
-
-    } catch (err: any) {
-      const timeMs = Date.now() - startTime;
-      let errData = "Erro Desconhecido";
-      let errName = "Network Error";
-      
-      if (err) {
-        errData = err.message || err.toString?.() || JSON.stringify(err) || "Erro Desconhecido";
-        if (err.name === 'AbortError') {
-           errName = 'Abortado';
-           errData = typeof err.message === 'string' && err.message.includes('Timeout') ? 'Timeout excedido (Cancelado)' : 'Requisição abortada pelo usuário';
-        } else if (err.name) {
-           errName = err.name;
-        }
-      }
-
-      handleActiveReqChange({
-        savedResponse: {
-          status: 0,
-          statusText: errName,
-          data: errData,
-          time: timeMs
-        }
-      });
-
-      // Registrar TODOS os disparos no histórico, incluindo falhas
-      const errHistoryEntry: HistoryEntry = {
-        id: uuidv4(),
-        requestId: activeReq.id,
-        requestName: activeReq.name,
-        method: activeReq.method,
-        url: targetUrl,
-        timestamp: new Date().toISOString(),
-        status: 0
-      };
-      addWorkspaceHistoryEntry(activeReq.id, errHistoryEntry);
-
-      const errOutput = {
-        Status: "0 Network Error",
-        Time: `${timeMs}ms`,
-        Error: errData,
-        Note: "Possible CORS, DNS issue, timeout, connection refused or manual abort."
-      };
-
-      addLog('error', `❌ Falha no disparo. Erro: ${errData}`, errOutput);
-    } finally {
-      setLoading(false);
-      abortControllerRef.current = null;
-      setShowLoadingOverlay(false);
-      if (loadingOverlayTimer.current) {
-        clearTimeout(loadingOverlayTimer.current);
-      }
-    }
-  };
 
   useEffect(() => {
     handleSendRef.current = handleSend;
   });
 
-  const runFolderScript = async (nodeId: string) => {
-    const node = getActiveNode(collection, nodeId);
-    if (!node || node.type !== 'folder' || !node.folderConfig?.setupScript) return;
 
-    setLoading(true);
-    addLog('info', `⚙️ Rodando Script Livre da pasta...`);
-    setActiveResTab('console');
 
-    try {
-      const scriptBody = node.folderConfig.setupScript;
 
-      const aurafetchCtx = {
-        setEnv: (key: string, value: any) => {
-          if (value === undefined || value === null) {
-            addLog('error', `⚠️ [aurafetch] Tentativa de salvar '${key}' com valor nulo ou indefinido! Verifique a resposta da API.`);
-            return;
-          }
-          const finalVal = String(value);
-          const wsNode = findParentWorkspace(nodeId);
-          const wsEnvId = wsNode?.workspaceConfig?.activeEnvironmentId;
-          if (wsNode && wsEnvId) {
-            updateNodeInCollection(wsNode.id, (wsN) => {
-              if (wsN.type !== 'workspace' || !wsN.workspaceConfig) return wsN;
-              return {
-                ...wsN,
-                workspaceConfig: {
-                  ...wsN.workspaceConfig,
-                  environments: wsN.workspaceConfig.environments.map(env => {
-                    if (env.id !== wsEnvId) return env;
-                    const exists = env.variables.find(v => v.key === key);
-                    if (exists) return { ...env, variables: env.variables.map(v => v.key === key ? { ...v, value: finalVal } : v) };
-                    return { ...env, variables: [...env.variables, { id: uuidv4(), key, value: finalVal }] };
-                  })
-                }
-              };
-            });
-            addLog('success', `🧩 [aurafetch] Variável de Ambiente '${key}' salva! (Valor: ${finalVal.substring(0, 10)}...)`);
-          } else {
-            setGlobalVariables(globals => {
-              const exists = globals.find(v => v.key === key);
-              if (exists) return globals.map(v => v.key === key ? { ...v, value: finalVal } : v);
-              return [...globals, { id: uuidv4(), key, value: finalVal }];
-            });
-            addLog('success', `🧩 [aurafetch] Variável Global '${key}' salva!`);
-          }
-        },
-        setVar: (key: string, value: any) => {
-          if (value === undefined || value === null) {
-            addLog('error', `⚠️ [aurafetch] Tentativa de salvar '${key}' na PASTA com valor nulo ou indefinido!`);
-            return;
-          }
-          const finalVal = String(value);
-          updateNodeInCollection(nodeId, (folder) => {
-            if (folder.type !== 'folder') return folder;
-            const vars = folder.folderConfig?.variables || [];
-            const exists = vars.find(v => v.key === key);
-            const newVars = exists
-              ? vars.map(v => v.key === key ? { ...v, value: finalVal } : v)
-              : [...vars, { id: uuidv4(), key, value: finalVal }];
-            return {
-              ...folder,
-              folderConfig: { ...(folder.folderConfig || { auth: defaultFolderAuth, variables: [] }), variables: newVars }
-            };
-          });
-          addLog('success', `🧩 [aurafetch] Variável da Pasta '${key}' setada para: ${finalVal.substring(0, 10)}...`);
-        },
-        log: (msg: any) => addLog('log', `📝 [aurafetch] ${typeof msg === 'object' ? JSON.stringify(msg, null, 2) : msg}`)
-      };
-
-      const customFetch = async (url: string, options?: RequestInit) => {
-        const finalUrl = applyVariables(url, node.id);
-        const finalOpts = { ...options };
-        if (finalOpts && finalOpts.headers) {
-          const newHeaders: any = {};
-          for (const [k, v] of Object.entries(finalOpts.headers)) {
-            newHeaders[applyVariables(k, node.id)] = applyVariables(v as string, node.id);
-          }
-          finalOpts.headers = newHeaders;
-        }
-        if (finalOpts && typeof finalOpts.body === 'string') {
-          finalOpts.body = applyVariables(finalOpts.body, node.id);
-        }
-
-        addLog('info', `🌐 [fetch] Chamada externa: ${finalUrl}`, {
-          method: finalOpts.method || 'GET',
-          headers: finalOpts.headers,
-          body: finalOpts.body
-        });
-
-        try {
-          const res = await safeFetch(finalUrl, finalOpts);
-          const txt = await res.text();
-          let parsed: any = txt;
-          try { parsed = JSON.parse(txt); } catch { }
-
-          const statusLog = res.status >= 200 && res.status < 300 ? 'success' : 'warn';
-          addLog(statusLog, `🌐 [fetch] Resposta: ${res.status} ${res.statusText}`, parsed);
-
-          // Re-create a fake response but with already read text 
-          // because script might call res.json() again
-          return {
-            ...res,
-            text: async () => txt,
-            json: async () => typeof parsed === 'string' ? JSON.parse(parsed) : parsed
-          } as any;
-        } catch (e: any) {
-          addLog('error', `❌ [fetch] Falha na rede: ${e.message}`);
-          throw e;
-        }
-      };
-
-      const AsyncFunction = Object.getPrototypeOf(async function () { }).constructor;
-      const fn = new AsyncFunction('aurafetch', 'fetch', 'tauriFetch', scriptBody);
-
-      await fn(aurafetchCtx, customFetch, customFetch);
-
-      addLog('success', `✅ Script finalizado! Variáveis injetadas com sucesso.`);
-    } catch (err: any) {
-      const errorMsg = err?.message || (typeof err === 'string' ? err : JSON.stringify(err)) || 'Erro interno desconhecido';
-      addLog('error', `❌ Falha no Script: ${errorMsg}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const downloadBlobWeb = (content: string, filename: string, mimeType = 'application/json') => {
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const exportCollection = async () => {
-    try {
-      // Export collection (workspaces are inside), and globals
-      const db = { collection, globals: globalVariables };
-      const content = JSON.stringify(db, null, 2);
-
-      if (!isTauri()) {
-        downloadBlobWeb(content, 'aurafetch_workspace.json');
-        addLog('success', '💾 Workspace exportado (download iniciado).');
-        return;
-      }
-
-      const filePath = await tauriSave({
-        filters: [{ name: 'AuraFetch Workspace', extensions: ['json'] }],
-        defaultPath: 'aurafetch_workspace.json'
-      });
-
-      if (filePath) {
-        const encoder = new TextEncoder();
-        await tauriWriteFile(filePath, encoder.encode(content));
-        addLog('success', `💾 Workspace exportado com sucesso em: ${filePath}`);
-      }
-    } catch (err: any) {
-      console.error('Export error:', err);
-      const msg = err?.message || (typeof err === 'string' ? err : JSON.stringify(err)) || 'Unknown Error';
-      addLog('error', `❌ Falha ao exportar workspace: ${msg}`);
-    }
-  };
-
-  const importCollection = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const obj = JSON.parse(event.target?.result as string);
-        if (obj.collection) {
-          setCollection(obj.collection);
-          if (obj.globals) setGlobalVariables(obj.globals);
-        } else {
-          // Legacy: raw collection array without wrapper
-          setCollection(obj);
-        }
-
-        switchActiveNode(null);
-        addLog('success', `📦 Importação de "${file.name}" feita 100%.`);
-      } catch (err) {
-        addLog('error', `❌ O arquivo JSON é inválido.`);
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
-  };
-
-  const copyResponse = () => {
-    if (!activeResponse) return;
-    const stringData = typeof activeResponse.data === 'object' ? JSON.stringify(activeResponse.data, null, 2) : String(activeResponse.data);
-    navigator.clipboard.writeText(stringData);
-    setCopiedRes(true);
-    setTimeout(() => setCopiedRes(false), 2000);
-  };
-
-  const downloadResponse = async () => {
-    if (!activeResponse) return;
-    try {
-      const { data, type, contentType } = activeResponse;
-      let extension = 'txt';
-      if (type === 'json') extension = 'json';
-      else if (type === 'image') {
-        const subType = contentType?.split('/')[1]?.split(';')[0] || 'png';
-        extension = subType;
-      }
-      else if (type === 'pdf') extension = 'pdf';
-      else if (type === 'html') extension = 'html';
-
-      // Clean name for filename
-      const safeName = (activeReq?.name ?? 'response').replace(/[^a-z0-9]/gi, '_').toLowerCase();
-
-      if (!isTauri()) {
-        if (type === 'image' || type === 'pdf') {
-          // data is already a data URL — create direct download link
-          const a = document.createElement('a');
-          a.href = data as string;
-          a.download = `response_${safeName}.${extension}`;
-          a.click();
-        } else {
-          const content = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
-          downloadBlobWeb(content, `response_${safeName}.${extension}`, contentType || 'text/plain');
-        }
-        addLog('success', `📂 Download iniciado.`);
-        return;
-      }
-
-      const filePath = await tauriSave({
-        filters: [{ name: 'Arquivo de Resposta', extensions: [extension] }],
-        defaultPath: `response_${safeName}.${extension}`
-      });
-
-      if (filePath) {
-        if (type === 'image' || type === 'pdf') {
-          // Convert from Base64 Data URL to Uint8Array
-          const b64Data = data.split(',')[1];
-          const binaryString = window.atob(b64Data);
-          const len = binaryString.length;
-          const bytes = new Uint8Array(len);
-          for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          await tauriWriteFile(filePath, bytes);
-        } else {
-          // Normal text/json
-          const content = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
-          const encoder = new TextEncoder();
-          await tauriWriteFile(filePath, encoder.encode(content));
-        }
-        addLog('success', `📂 Arquivo salvo em: ${filePath}`);
-      }
-    } catch (err: any) {
-      addLog('error', `❌ Falha ao salvar arquivo: ${err.message}`);
-    }
-  };
 
   const pickBinaryFile = async () => {
     if (!isTauri()) {
@@ -1987,210 +735,15 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
     );
   };
 
+  // Wrapper functions to adapt hook API to App.tsx call sites
   const removeEnv = (eId: string) => {
-    if (!activeNodeId) return;
-    const ws = findParentWorkspace(activeNodeId);
-    if (!ws) return;
-    updateNodeInCollection(ws.id, (node) => {
-      if (node.type !== 'workspace' || !node.workspaceConfig) return node;
-      return {
-        ...node,
-        workspaceConfig: {
-          ...node.workspaceConfig,
-          environments: node.workspaceConfig.environments.filter(e => e.id !== eId),
-          activeEnvironmentId: node.workspaceConfig.activeEnvironmentId === eId ? null : node.workspaceConfig.activeEnvironmentId
-        }
-      };
-    });
-    if (editingEnvId === eId) setEditingEnvId(null);
+    removeEnvHook(eId, activeNodeId, editingEnvId, setEditingEnvId);
   };
 
   const addEnv = () => {
-    if (!activeNodeId) return;
-    const ws = findParentWorkspace(activeNodeId);
-    if (!ws) return;
-    const freshId = uuidv4();
-    updateNodeInCollection(ws.id, (node) => {
-      if (node.type !== 'workspace' || !node.workspaceConfig) return node;
-      return {
-        ...node,
-        workspaceConfig: {
-          ...node.workspaceConfig,
-          environments: [...node.workspaceConfig.environments, { id: freshId, name: 'Novo Ambiente', variables: [] }]
-        }
-      };
-    });
-    setEditingEnvId(freshId);
+    addEnvHook(activeNodeId, setEditingEnvId);
   };
 
-  const renderTree = (nodes: CollectionNode[], depth = 0) => {
-    return nodes.map((node) => (
-      <Fragment key={node.id}>
-        <div
-          className={`tree-item ${node.type === 'workspace' ? 'workspace-node' : ''} ${activeNodeId === node.id ? 'active-node' : ''} ${dragOverInfo?.id === node.id ? `drag-over-${dragOverInfo.position}` : ''}`}
-          draggable={true}
-          onDragStart={(e) => {
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', node.id);
-            e.dataTransfer.setData('text/uri-list', 'http://aurafetch.io/' + node.id);
-            draggedNodeIdRef.current = node.id;
-            document.body.classList.add('dragging-active');
-            e.currentTarget.classList.add('is-dragging');
-          }}
-          onDragEnd={(e) => {
-            draggedNodeIdRef.current = null;
-            setDragOverInfo(null);
-            document.body.classList.remove('dragging-active');
-            e.currentTarget.classList.remove('is-dragging');
-            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-          }}
-          onDragOver={(e) => {
-            if (draggedNodeIdRef.current) {
-              e.preventDefault();
-              e.stopPropagation();
-              e.dataTransfer.dropEffect = 'move';
-              const rect = e.currentTarget.getBoundingClientRect();
-              const y = e.clientY - rect.top;
-              let position: 'top' | 'bottom' | 'inside' = 'bottom';
-              if (y < rect.height / 3) position = 'top';
-              else if ((node.type === 'folder' || node.type === 'workspace') && y > rect.height / 3 && y < (rect.height * 2) / 3) position = 'inside';
-              else position = 'bottom';
-              if (dragOverInfo?.id !== node.id || dragOverInfo?.position !== position) {
-                setDragOverInfo({ id: node.id, position });
-              }
-            }
-          }}
-          onDragEnter={(e) => {
-            if (draggedNodeIdRef.current && draggedNodeIdRef.current !== node.id) {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-            }
-          }}
-          onDragLeave={() => { if (dragOverInfo?.id === node.id) setDragOverInfo(null); }}
-          onDrop={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setDragOverInfo(null);
-            const rect = e.currentTarget.getBoundingClientRect();
-            const y = e.clientY - rect.top;
-            const isTop = y < rect.height / 3;
-            const isInside = node.type === 'folder' && y >= rect.height / 3 && y <= (rect.height * 2) / 3;
-            const dId = e.dataTransfer.getData('text/plain') || draggedNodeIdRef.current;
-            if (dId) handleDrop(node.id, isInside, isTop);
-          }}
-          onClick={() => { switchActiveNode(node.id); setOpenMenuNodeId(null); }}
-          style={{ paddingLeft: `${depth * 14 + 8}px`, opacity: draggedNodeIdRef.current === node.id ? 0.3 : 1 }}
-        >
-          {/* ── Conteúdo ── */}
-          <div className="tree-item-content">
-            {(node.type === 'folder' || node.type === 'workspace') && (
-              <span
-                className="expander-icon"
-                draggable={false}
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); toggleFolder(node.id); }}
-              >
-                {node.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              </span>
-            )}
-
-            {node.type === 'workspace' ? (
-              <Database size={14} className="text-accent" style={{ opacity: 0.9, flexShrink: 0 }} />
-            ) : node.type === 'folder' ? (
-              <Folder size={14} className="text-accent" style={{ opacity: 0.8, flexShrink: 0 }} />
-            ) : (
-              <span className={`method-tag method-${node.request!.method}`}>
-                {node.request!.method}
-              </span>
-            )}
-
-            {/* Workspace env badge */}
-            {node.type === 'workspace' && node.workspaceConfig && (() => {
-              const activeEnv = node.workspaceConfig.environments.find(e => e.id === node.workspaceConfig!.activeEnvironmentId);
-              return (
-                <span className={`workspace-env-badge ${activeEnv ? '' : 'no-env'}`}>
-                  <span className="env-dot" />
-                  {activeEnv ? activeEnv.name : 'Sem Amb.'}
-                </span>
-              );
-            })()}
-
-            {editingNodeId === node.id ? (
-              <input
-                autoFocus
-                className="rename-input"
-                value={editingName}
-                onClick={e => e.stopPropagation()}
-                onChange={e => setEditingName(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') commitRename(node.id);
-                  if (e.key === 'Escape') setEditingNodeId(null);
-                }}
-                onBlur={() => commitRename(node.id)}
-              />
-            ) : (
-              <span
-                className={`node-name ${node.type === 'folder' ? 'folder-label' : ''}`}
-                onDoubleClick={(e) => startRename(node.id, node.name, e as any)}
-                title={node.name}
-              >
-                {node.name}
-              </span>
-            )}
-          </div>
-
-          {/* ── Menu trigger (único botão "⋮") ── */}
-          <div className="tree-item-menu-trigger">
-            <button
-              className="icon-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpenMenuNodeId(openMenuNodeId === node.id ? null : node.id);
-              }}
-              title="Opções"
-            >
-              <MoreHorizontal size={14} />
-            </button>
-          </div>
-
-          {/* ── Dropdown Menu ── */}
-          {openMenuNodeId === node.id && (
-            <div className="tree-dropdown-menu" onClick={(e) => e.stopPropagation()}>
-              {(node.type === 'folder' || node.type === 'workspace') && (
-                <>
-                  <button onClick={() => { addRequestToFolder(node.id); setOpenMenuNodeId(null); }}>
-                    <FilePlus size={13} /> Nova Requisição
-                  </button>
-                  <button onClick={() => { addWebSocketToFolder(node.id); setOpenMenuNodeId(null); }}>
-                    <Globe size={13} /> Nova Conexão WS
-                  </button>
-                  <button onClick={() => { addFolderTo(node.id); setOpenMenuNodeId(null); }}>
-                    <Folder size={13} /> Nova Pasta
-                  </button>
-                </>
-              )}
-              {node.type === 'request' && (
-                <button onClick={() => { cloneRequest(node.id); setOpenMenuNodeId(null); }}>
-                  <CopyPlus size={13} /> Duplicar
-                </button>
-              )}
-              <button onClick={(e) => { startRename(node.id, node.name, e); setOpenMenuNodeId(null); }}>
-                <Edit2 size={12} /> Renomear
-              </button>
-              <button className="danger" onClick={() => { setNodeToDelete({ id: node.id, name: node.name }); setOpenMenuNodeId(null); }}>
-                <Trash2 size={13} /> Excluir
-              </button>
-            </div>
-          )}
-        </div>
-        {(node.type === 'folder' || node.type === 'workspace') && node.expanded && node.children && (
-          <div className="tree-children-container" key={`${node.id}-children`}>
-            {renderTree(node.children, depth + 1)}
-          </div>
-        )}
-      </Fragment>
-    ));
-  };
 
   return (
     <div className="layout">
@@ -2260,23 +813,6 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
       )}
 
       {/* Modal Confirmation */}
-      {nodeToDelete && (
-        <div className="modal-overlay" onClick={() => setNodeToDelete(null)}>
-          <div className="modal-content glass-panel" onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', color: 'var(--danger)', marginBottom: '16px' }}>
-              <AlertTriangle size={28} />
-              <h3 style={{ margin: 0, fontSize: '20px', letterSpacing: '-0.3px' }}>Confirmar Eliminação</h3>
-            </div>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '28px', lineHeight: 1.6 }}>
-              A deleção do item <strong style={{ color: 'var(--text-primary)' }}>"{nodeToDelete.name}"</strong> será irremovível. Pastas aninhadas também encontrarão seu fim. Prossigo?
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-              <button className="btn btn-secondary" onClick={() => setNodeToDelete(null)}>Repensar 🤔</button>
-              <button className="btn btn-danger" onClick={confirmDelete}>Deletar Logo 💥</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Modal Management (Ambientes e Var. Globais) */}
       {isEnvModalOpen && (
@@ -2391,163 +927,10 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
       )}
 
       {/* Sidebar */}
-      <aside className="sidebar" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-        {/* 1. Header (Fixed Top) */}
-        <div style={{ padding: '20px 16px 14px 16px', borderBottom: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.1)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-            <h2 className="app-title" onClick={() => switchActiveNode(null)} style={{ cursor: 'pointer', margin: 0 }}>
-              <span className="highlight">Aura</span>Fetch
-            </h2>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginLeft: '2px' }}>Pesquisar</label>
-            <input
-              type="text"
-              value={treeSearchQuery}
-              onChange={e => setTreeSearchQuery(e.target.value)}
-              placeholder="Buscar requisição, pasta..."
-              className="text-input"
-              style={{ width: '100%', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-strong)', padding: '6px 10px', fontSize: '13px', borderRadius: '6px' }}
-            />
-          </div>
-        </div>
-
-        {/* Sidebar Tabs for Coleção vs Histórico */}
-        <div style={{ display: 'flex', borderBottom: '1px solid var(--border-subtle)', background: 'rgba(0,0,0,0.1)' }}>
-          <button
-            onClick={() => setSidebarTab('collection')}
-            style={{ flex: 1, padding: '12px', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: sidebarTab === 'collection' ? 'var(--accent-primary)' : 'var(--text-muted)', border: 'none', background: 'transparent', cursor: 'pointer', borderBottom: sidebarTab === 'collection' ? '2px solid var(--accent-primary)' : 'none' }}
-          >
-            Coleções
-          </button>
-          <button
-            onClick={() => setSidebarTab('history')}
-            style={{ flex: 1, padding: '12px', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: sidebarTab === 'history' ? 'var(--accent-primary)' : 'var(--text-muted)', border: 'none', background: 'transparent', cursor: 'pointer', borderBottom: sidebarTab === 'history' ? '2px solid var(--accent-primary)' : 'none' }}
-          >
-            Histórico
-          </button>
-        </div>
-
-        {sidebarTab === 'collection' ? (
-          <>
-            {/* 2. Collection Actions Bar (Fixed Below Sidebar Header) */}
-            <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.02)' }}>
-              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Coleção</span>
-              <div className="sidebar-actions" style={{ gap: '2px' }}>
-                <button className="btn-icon" onClick={() => setShowNewWorkspaceInput(true)} title="Novo Workspace" style={{ padding: '5px' }}><Database size={14} /></button>
-                <button className="btn-icon" onClick={exportCollection} title="Exportar" style={{ padding: '5px' }}><Download size={14} /></button>
-                <label className="btn-icon" style={{ cursor: 'pointer', margin: 0, padding: '5px' }} title="Importar">
-                  <Upload size={14} />
-                  <input type="file" accept=".json" onChange={importCollection} style={{ display: 'none' }} />
-                </label>
-              </div>
-            </div>
-            {showNewWorkspaceInput ? (
-              <div style={{ display: 'flex', gap: '4px', padding: '4px 8px' }}>
-                <input
-                  className="text-input"
-                  placeholder="Nome do workspace..."
-                  value={newWorkspaceName}
-                  autoFocus
-                  onChange={e => setNewWorkspaceName(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') addWorkspace();
-                    if (e.key === 'Escape') { setShowNewWorkspaceInput(false); setNewWorkspaceName(''); }
-                  }}
-                  style={{ flex: 1, fontSize: '12px', padding: '4px 8px' }}
-                />
-                <button className="btn btn-primary" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={addWorkspace}>OK</button>
-              </div>
-            ) : null}
-
-            {/* 3. Scrollable Tree Area */}
-            <div
-              className="sidebar-tree-container"
-              style={{ flex: 1, padding: '10px 8px', overflowY: 'auto', overflowX: 'auto', minHeight: '100px' }}
-              onDragOver={(e) => {
-                if (draggedNodeIdRef.current) {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  e.dataTransfer.dropEffect = 'move';
-                }
-              }}
-              onDragEnter={(e) => {
-                if (draggedNodeIdRef.current) e.preventDefault();
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (draggedNodeIdRef.current) {
-                  handleDrop(null, false);
-                }
-              }}
-            >
-              {(() => {
-                if (!treeSearchQuery.trim()) return renderTree(collection);
-
-                const query = treeSearchQuery.toLowerCase();
-                const filterNodes = (nodes: CollectionNode[]): CollectionNode[] => {
-                  return nodes.reduce((acc: CollectionNode[], node) => {
-                    const matches = node.name.toLowerCase().includes(query);
-                    const children = node.children ? filterNodes(node.children) : [];
-
-                    if (matches || children.length > 0) {
-                      acc.push({ ...node, children, expanded: children.length > 0 ? true : node.expanded });
-                    }
-                    return acc;
-                  }, []);
-                };
-
-                const filtered = filterNodes(collection);
-                return filtered.length > 0
-                  ? renderTree(filtered)
-                  : <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Nenhum resultado encontrado.</div>;
-              })()}
-              <div style={{ height: '80px', pointerEvents: 'none' }} />
-            </div>
-          </>
-        ) : (
-          <div className="sidebar-history-container" style={{ flex: 1, padding: '16px 14px', overflowY: 'auto', background: 'rgba(0,0,0,0.05)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Recentes</span>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                {activeNodeId ? (findParentWorkspace(activeNodeId)?.name || '') : ''}
-              </span>
-            </div>
-            {(() => {
-              const wsHistory = activeNodeId ? getWorkspaceHistory(activeNodeId) : [];
-              if (wsHistory.length === 0) return (
-                <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
-                  <Clock size={32} style={{ opacity: 0.1, marginBottom: '12px' }} />
-                  <p>Nenhuma requisição feita recentemente.</p>
-                </div>
-              );
-              return wsHistory.map(entry => (
-                <div
-                  key={entry.id}
-                  className="history-card"
-                  onClick={() => switchActiveNode(entry.requestId)}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span className={`method-${entry.method}`} style={{ fontSize: '10px', fontWeight: 900 }}>{entry.method}</span>
-                    <span style={{ fontSize: '11px', fontWeight: 800, color: entry.status >= 200 && entry.status < 300 ? 'var(--success)' : 'var(--text-error)' }}>
-                      {entry.status}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', margin: '4px 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {entry.requestName}
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10px', color: 'var(--text-muted)' }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px' }}>{entry.url}</span>
-                    <span>{new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                  </div>
-                </div>
-              ));
-            })()}
-          </div>
-        )}
-      </aside>
+      <Sidebar
+        exportCollection={exportCollection}
+        importCollection={importCollection}
+      />
 
       {/* Main Content */}
       <main className="main-content">
@@ -2560,7 +943,7 @@ aurafetch.log("Token renovado e salvo na pasta!");`;
               Selecione uma requisição no menu lateral ou crie uma nova para começar.
             </p>
             <div style={{ display: 'flex', gap: '16px' }}>
-              <button className="btn btn-primary" onClick={() => setShowNewWorkspaceInput(true)}><Database size={16} /> Novo Workspace</button>
+              <button className="btn btn-primary" title="Clique no botão 'Novo Workspace' na barra lateral"><Database size={16} /> Novo Workspace</button>
             </div>
             <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px dashed var(--border-strong)', width: '100%', maxWidth: '400px', display: 'flex', justifyContent: 'center' }}>
               <button className="btn btn-primary" onClick={generateCrudExample} style={{ background: 'var(--accent-gradient)', border: 'none', boxShadow: '0 4px 15px rgba(99, 102, 241, 0.4)' }}>
