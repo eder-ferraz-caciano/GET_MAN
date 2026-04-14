@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.4.0](https://github.com/eder-ferraz-caciano/AuraFetch/compare/v1.3.2...v1.4.0) (2026-04-14)
+
+
+### ♻️ Refactor | Refatoração
+
+* create RequestContext and move global state out of App.tsx ([0ef3b3a](https://github.com/eder-ferraz-caciano/AuraFetch/commit/0ef3b3a4a7449ee671b79da3619402ca9e55b7d4))
+* extract ErrorBoundary to src/components/ErrorBoundary ([6b34834](https://github.com/eder-ferraz-caciano/AuraFetch/commit/6b348343d1b9ace5c0d567d554518d2571103fe9))
+* extract safeFetch utils to src/utils/safeFetch.ts ([c95544a](https://github.com/eder-ferraz-caciano/AuraFetch/commit/c95544a68cd33c3f90f9a897fed84f9d56c4982a))
+* extract types to src/types/index.ts ([8a4c3bb](https://github.com/eder-ferraz-caciano/AuraFetch/commit/8a4c3bbf17eba70785012293ce3cc8fa45891080))
+
+
+### ✨ Features | Novidades
+
+* implement Fase 3b - Network Development Tools (IP Info, DNS Lookup, Ping) ([4dd00d2](https://github.com/eder-ferraz-caciano/AuraFetch/commit/4dd00d2eebd0b1401e9270abc1bbcc79820ba067))
+
+
+### 🐛 Bug Fixes | Correções
+
+* binary response handling, download formats, and update all Cypress selectors ([4c52845](https://github.com/eder-ferraz-caciano/AuraFetch/commit/4c528451cc315a4aa501aef6e7d11b26412be421))
+
 ### [1.3.2](https://github.com/eder-ferraz-caciano/AuraFetch/compare/v1.3.1...v1.3.2) (2026-03-26)
 
 
